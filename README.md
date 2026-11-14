@@ -21,8 +21,8 @@ Not built yet: real verdict logic, trend matching against items, Nessie, and the
 | `dashboard/` | One static page, served by the backend at `/dashboard-ui` |
 | `docs/` | `store-test-results.md`, the table for testing real stores by hand |
 | `seed/` | `seed.py` plus a `photos/` folder for the demo user's closet |
-| `scripts/` | `check_keys.py` checks each external service key. `eval_attributes.py` scores Part 2. `create_indexes.py` builds the Atlas indexes, `tune_matching.py` scores closet matching and `reembed_closet.py` recomputes closet embeddings. `seed_trends.py` and `run_trend_agent.py` fill the trends collection |
-| `eval/` | `attributes_eval.csv`, labeled items for the Part 2 eval, and `match_pairs.csv` for matching |
+| `scripts/` | `check_keys.py` checks each external service key. `eval_attributes.py` scores Part 2 and `eval_verdicts.py` scores Part 5. `create_indexes.py` builds the Atlas indexes, `tune_matching.py` scores closet matching and `reembed_closet.py` recomputes closet embeddings. `seed_trends.py` and `run_trend_agent.py` fill the trends collection |
+| `eval/` | `attributes_eval.csv`, labeled items for the Part 2 eval, `match_pairs.csv` for matching, and `verdicts_eval.csv` for the Part 5 eval |
 | `tests/` | Offline Python tests: `python -m unittest discover tests` |
 
 ## Setup
@@ -166,7 +166,7 @@ python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-<time>.js
 
 ```bash
 node extension/tests/price.test.js       # price parser unit tests
-python -m unittest discover tests        # trend guards, seed rules, Part 2 target-item checks, alternative links; offline
+python -m unittest discover tests        # trend guards, seed rules, Part 2 target-item checks, alternative links, verdict engine and eval logic; offline
 ```
 
 ### Extension E2E test
@@ -196,6 +196,21 @@ python scripts/eval_attributes.py --crops /tmp/crops   # also save each row's ta
 ```
 
 It runs the same path as `POST /attributes` and also prints, per row, the name check result (`category_check`), `target_box_2d`, and `other_garments_visible`, then a summary of category conflicts (name check vs Gemini), how many a retry fixed, and how many were forced from the name.
+
+### Part 5 verdict eval
+
+`scripts/eval_verdicts.py` runs the verdict engine on each row of `eval/verdicts_eval.csv` for the demo user (`demo@secondlook.test`) and compares the verdict to `expected_verdict`. It is read-only: the engine runs with `save=False`, and the script counts the user's verdict and closet documents before and after the run. It needs the demo closet in Atlas and the keys in `.env`. No server or login is needed.
+
+CSV columns: `name`, `price`, `store`, `image_url`, `description`, `expected_verdict` (`have_this_look`, `micro_trend`, `good_buy`, or `TODO`), and `notes` (why that verdict is expected). Rows whose `expected_verdict` or `name` starts with `TODO` are skipped and counted. They need the 10 seed trends, so fill them in after `seed_trends.py` loads them.
+
+```bash
+python scripts/eval_verdicts.py --dry-run          # list the rows and check the user, no engine calls
+python scripts/eval_verdicts.py                    # all rows
+python scripts/eval_verdicts.py --row 8            # one row, by number or by part of the name
+python scripts/eval_verdicts.py --limit 5 --csv path/to/other.csv
+```
+
+The report shows agreement (overall and per expected verdict), every Claude override (`code said` and `Claude said`, with the row name), `decided_by` counts, and p50 and p95 latency. Disagreements do not change the exit code. Exit codes: 1 if the engine raised on a row, 2 for a bad CSV or a missing user, 3 if the document counts changed during the run.
 
 ## Closet (Part 3)
 
