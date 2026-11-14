@@ -2,7 +2,9 @@
 
 Run from the project root:  python scripts/create_indexes.py
 Safe to run again. The Atlas free tier allows 3 search indexes in total, so this lists the existing ones
-across every collection first and creates only what is missing.
+across every collection first and creates only what is missing. An existing closet_vector with an older
+definition is updated in place (Atlas keeps serving the old version until the new one is built), and the
+script waits until the current definition is READY.
 """
 import sys
 import time
@@ -24,6 +26,7 @@ DEFINITION = {
         {"type": "vector", "path": "embedding", "numDimensions": DIMENSIONS, "similarity": "cosine"},
         {"type": "filter", "path": "user_id"},
         {"type": "filter", "path": "attributes.category"},
+        {"type": "filter", "path": "has_description"},  # find_matches() compares like with like
     ]
 }
 
@@ -57,20 +60,23 @@ def main():
         closet_items.create_search_index(SearchIndexModel(definition=DEFINITION, name=VECTOR_INDEX, type="vectorSearch"))
         print(f"created {VECTOR_INDEX}")
     elif mine.get("latestDefinition") != DEFINITION:
-        print(f"WARNING: {VECTOR_INDEX} exists with a different definition. Left unchanged:\n  {mine.get('latestDefinition')}")
+        closet_items.update_search_index(VECTOR_INDEX, DEFINITION)
+        print(f"updated {VECTOR_INDEX}. Old definition:\n  {mine.get('latestDefinition')}")
 
     started = time.monotonic()
     while True:
-        index = next((i for i in closet_items.list_search_indexes(VECTOR_INDEX)), None)
-        status, queryable = (index or {}).get("status"), (index or {}).get("queryable")
-        if queryable:
-            print(f"{VECTOR_INDEX} is queryable (status {status})")
+        index = next((i for i in closet_items.list_search_indexes(VECTOR_INDEX)), None) or {}
+        status, queryable = index.get("status"), index.get("queryable")
+        current = index.get("latestDefinition") == DEFINITION
+        # During an update the old version stays queryable, so wait for READY on the new definition too.
+        if queryable and status == "READY" and current:
+            print(f"{VECTOR_INDEX} is queryable with the current definition (status {status})")
             return
         if status == "FAILED":
             sys.exit(f"{VECTOR_INDEX} failed to build: {index}")
         if time.monotonic() - started > WAIT_S:
-            sys.exit(f"{VECTOR_INDEX} is still not queryable after {WAIT_S} s (status {status}). Run this again later.")
-        print(f"  waiting... status={status}", flush=True)
+            sys.exit(f"{VECTOR_INDEX} is still not READY after {WAIT_S} s (status {status}). Run this again later.")
+        print(f"  waiting... status={status} queryable={queryable} current_definition={current}", flush=True)
         time.sleep(5)
 
 

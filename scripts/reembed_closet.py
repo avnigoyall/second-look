@@ -9,6 +9,7 @@ For each item this recomputes:
 - `embedding`: embed_text(embedding_text(attributes, description, name)), the same path new_closet_doc() uses,
   so a re-embedded item matches exactly like a newly added one.
 - `image_embedding`: embed_image(photo) when the item has `image_data`, otherwise null.
+- `has_description`: whether the item has a description. find_matches() uses it to pick the query vector.
 
 The attribute_string is the embedding input. It is printed, not stored, because closet documents have no
 field for it. Stored attributes are not re-extracted. Every vector is computed before anything is written,
@@ -26,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pymongo import UpdateOne  # noqa: E402
 
 from backend.db import closet_items, users  # noqa: E402
-from backend.services.closet import embedding_text  # noqa: E402
+from backend.services.closet import embedding_text, has_description  # noqa: E402
 from backend.services.embeddings import PARALLEL_CALLS, EmbeddingError, embed_image, embed_many  # noqa: E402
 
 DEMO_EMAIL = "demo@secondlook.test"
@@ -85,9 +86,11 @@ def main() -> int:
         new_text, new_image = text_vectors.get(i), image_vectors[i]
         print(f"  {d.get('name')!r}: text {cosine(d.get('embedding'), new_text)}, "
               f"image {cosine(d.get('image_embedding'), new_image)}")
-        ops.append(UpdateOne({"_id": d["_id"]}, {"$set": {"embedding": new_text, "image_embedding": new_image}}))
+        ops.append(UpdateOne({"_id": d["_id"]}, {"$set": {"embedding": new_text, "image_embedding": new_image,
+                                                          "has_description": has_description(d.get("description"))}}))
     result = closet_items.bulk_write(ops, ordered=False)
-    print(f"\nUpdated {result.modified_count} of {len(docs)} items "
+    described = sum(has_description(d.get("description")) for d in docs)
+    print(f"\nUpdated {result.modified_count} of {len(docs)} items, {described} with a description "
           f"({len(text_vectors)} text embeddings, {sum(v is not None for v in image_vectors)} image embeddings).")
     return 0
 
