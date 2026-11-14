@@ -15,6 +15,7 @@ from backend.db import client, closet_items, ensure_indexes, trends, users, verd
 from backend.images import decode_base64_image, to_data_url
 from backend.page_reader import ReadPageError, read_page
 from backend.settings import ROOT
+from backend.routers import trends as trends_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -252,3 +253,6 @@ def cart_summary(user=Depends(current_user)):
 @app.get("/dashboard-ui", include_in_schema=False)
 def dashboard_ui():
     return FileResponse(ROOT / "dashboard" / "index.html")
+
+
+app.include_router(trends_router.router)

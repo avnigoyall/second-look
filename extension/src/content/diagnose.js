@@ -9,6 +9,7 @@
     const report = {
       url: location.href,
       tier_used: item?.source_tier ?? null,
+      price_source: item?.price_source ?? null,
       fields_found: {
         name: Boolean(item?.name),
         image_url: Boolean(item?.image_url),

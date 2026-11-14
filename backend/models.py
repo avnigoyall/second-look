@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.settings import ATTRIBUTES
+from backend.trends import TrendAlternative, TrendFeatures, TrendSource
 
 VerdictType = Literal["have_this_look", "micro_trend", "good_buy"]
 ProfileType = Literal["demo", "new", "real"]
@@ -71,17 +72,31 @@ class ClosetItem(BaseModel):
     created_at: datetime
 
 
-class Trend(BaseModel):
+class TrendBase(BaseModel):
+    """A trend from the trends collection. See backend/trends.py for the stored document and its rules."""
     id: str
     name: str
-    features: dict
+    category: str | None = None
+    features: TrendFeatures = TrendFeatures()
     first_seen: datetime | None = None
-    lifespan_weeks_est: int | None = None
+    lifespan_weeks_est: float | None = Field(None, description="Set only when lifespan_source_url cites it")
+    lifespan_bucket: Literal["short", "medium", "long"] | None = Field(
+        None, description="short: up to 16 weeks, medium: up to 52, long: longer. Set only when lifespan_source_url cites it")
     lifespan_label: str | None = None
-    sources: list[str] = []
-    example_images: list[str] = []
-    alternatives: list[Alternative] = []
+    lifespan_source_url: str | None = None
+    sources: list[TrendSource] = []
+    alternatives: list[TrendAlternative] = []
     origin: Literal["seed", "agent"]
+    search_suggestions_html: str | None = Field(None, description="Google Search suggestions chip HTML. Agent trends only")
+
+
+class Trend(TrendBase):
+    example_images: list[str] = Field([], description="Image URLs or data URLs")
+
+
+class TrendSummary(TrendBase):
+    """GET /trends item: example images can be large data URLs, so only their count is sent."""
+    example_image_count: int = 0
 
 
 class Verdict(BaseModel):
@@ -205,6 +220,10 @@ class DashboardResponse(BaseModel):
     waste_avoided: float | None = None
     verdicts: list[Verdict]
     cost_per_wear: float | None = None
+
+
+class TrendsResponse(BaseModel):
+    trends: list[TrendSummary]
 
 
 class CartSummaryResponse(BaseModel):

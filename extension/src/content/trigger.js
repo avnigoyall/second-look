@@ -15,6 +15,12 @@
     if (!event.isTrusted) return;
     const control = global.SecondLookMatchers.findControl(event, global.SecondLookMatchers.isAddToCart);
     if (!control) return;
+    // Recommendation tiles ("you may also like") have their own add buttons for other products.
+    const other = global.SecondLookMatchers.otherProductTile(control);
+    if (other) {
+      console.log(LOG, "add-to-cart click ignored: button is in a tile for another product:", other);
+      return;
+    }
     const url = location.href;
     const now = Date.now();
     if (now - (lastCheck.get(url) || 0) < DEBOUNCE_MS) {
