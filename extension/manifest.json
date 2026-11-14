@@ -1,17 +1,40 @@
 {
   "manifest_version": 3,
   "name": "Second Look",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Checks an item in your online cart against your closet and current trends before you buy.",
-  "permissions": ["storage", "activeTab"],
-  "host_permissions": ["http://localhost:8000/*"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "src/background/index.js"
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/shadowHost.js", "src/content/toast.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/shared/sessionStore.js",
+        "src/content/shadowHost.js",
+        "src/content/reader/price.js",
+        "src/content/reader/jsonld.js",
+        "src/content/reader/meta.js",
+        "src/content/reader/readItem.js",
+        "src/content/matchers.js",
+        "src/content/card.styles.js",
+        "src/content/card.js",
+        "src/content/flow.js",
+        "src/content/trigger.js",
+        "src/content/removal.js"
+      ],
       "run_at": "document_idle"
     }
   ],

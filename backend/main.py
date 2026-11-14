@@ -13,6 +13,7 @@ from backend import models as m
 from backend.auth import check_password, create_token, current_user, hash_password
 from backend.db import client, closet_items, ensure_indexes, trends, users, verdicts
 from backend.images import decode_base64_image, to_data_url
+from backend.page_reader import ReadPageError, read_page
 from backend.settings import ROOT
 
 @asynccontextmanager
@@ -179,6 +180,20 @@ def feedback(body: m.FeedbackRequest, user=Depends(current_user)):
     doc = own_verdict(body.verdict_id, user)
     verdicts.update_one({"_id": doc["_id"]}, {"$set": {"feedback": body.value}})
     return {"ok": True}
+
+
+# ---------- item reading ----------
+
+@app.post("/read-page", response_model=m.ReadPageResponse)
+def read_page_endpoint(body: m.ReadPageRequest, user=Depends(current_user)):
+    """Tier 3 reader: Gemini extracts name, price and image from trimmed page text."""
+    if not body.text.strip():
+        raise HTTPException(422, "text is empty")
+    try:
+        item = read_page(body.url, body.text, body.image_url)
+    except ReadPageError as e:
+        raise HTTPException(502, str(e))
+    return item.model_dump()
 
 
 # ---------- closet ----------

@@ -128,6 +128,12 @@ class FeedbackRequest(BaseModel):
     value: Literal["up", "down"]
 
 
+class ReadPageRequest(BaseModel):
+    url: str
+    text: str = Field(max_length=50000, description="Trimmed visible page text. Only the first 8000 characters are used")
+    image_url: str | None = None
+
+
 class ClosetCreateRequest(BaseModel):
     name: str | None = None
     image_base64: str | None = Field(None, description="Bare base64 or a data URL")
@@ -162,6 +168,12 @@ class AnalyzeResponse(BaseModel):
     outfits: list[Outfit] = []
     expected_wears: int | None = None
     cost_per_wear: float | None = None
+
+
+class ReadPageResponse(BaseModel):
+    name: str | None = None
+    price: float | None = None
+    image_url: str | None = None
 
 
 class Balances(BaseModel):

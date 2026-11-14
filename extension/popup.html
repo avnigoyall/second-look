@@ -6,7 +6,13 @@
 <link rel="stylesheet" href="src/popup/popup.css">
 </head>
 <body>
-  <header><span class="brand">Second Look</span></header>
+  <header>
+    <span class="brand">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/></svg>
+      Second Look
+    </span>
+    <button id="logout" class="ghost small" hidden>Log out</button>
+  </header>
 
   <form id="login-view" hidden>
     <label>Email <input id="email" type="email" autocomplete="username" required></label>
@@ -14,14 +20,38 @@
     <button type="submit" class="primary">Log in</button>
   </form>
 
-  <section id="main-view" hidden>
-    <p id="who"></p>
-    <button id="send-test" class="primary">Send test item</button>
-    <button id="logout" class="ghost">Log out</button>
-  </section>
+  <main id="main-view" hidden>
+    <p id="who" class="muted small"></p>
+    <button id="check" class="primary">Check this item</button>
+    <p id="status" class="status" role="status"></p>
 
-  <p id="status" class="status" role="status"></p>
+    <section aria-labelledby="session-title">
+      <div class="section-head">
+        <h2 id="session-title">Session items</h2>
+        <span id="session-count" class="muted small"></span>
+      </div>
+      <p id="session-empty" class="empty">Items you check show up here. Use the × to remove one you took out of your cart.</p>
+      <ul id="session-list"></ul>
+    </section>
 
+    <section aria-labelledby="diag-title">
+      <div class="section-head">
+        <h2 id="diag-title">Store testing</h2>
+      </div>
+      <button id="diagnose" class="secondary">Diagnose this page</button>
+      <div id="diag-box" class="diag" hidden>
+        <div class="diag-head">
+          <span id="diag-summary" class="small"></span>
+          <button id="copy" class="ghost small">Copy JSON</button>
+        </div>
+        <pre id="diag-output" tabindex="0"></pre>
+      </div>
+    </section>
+  </main>
+
+  <p id="login-status" class="status" role="status"></p>
+
+  <script src="src/shared/sessionStore.js"></script>
   <script src="src/popup/popup.js"></script>
 </body>
 </html>
