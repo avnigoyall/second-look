@@ -155,7 +155,7 @@ python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-<time>.js
 
 ```bash
 node extension/tests/price.test.js       # price parser unit tests
-python -m unittest discover tests        # trend guards and seed rules, offline
+python -m unittest discover tests        # trend guards, seed rules, Part 2 target-item checks; offline
 ```
 
 ### Extension E2E test
@@ -179,7 +179,10 @@ Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension
 
 ```bash
 python scripts/eval_attributes.py                  # or pass another CSV path
+python scripts/eval_attributes.py --crops /tmp/crops   # also save each row's target crop
 ```
+
+It runs the same path as `POST /attributes` and also prints, per row, the name check result (`category_check`), `target_box_2d`, and `other_garments_visible`, then a summary of category conflicts (name check vs Gemini), how many a retry fixed, and how many were forced from the name.
 
 ## Closet (Part 3)
 
@@ -294,6 +297,13 @@ It prints the cosine similarity for each pair, marks which pairs the current `lo
 - **`fabric_confidence` levels:** `high` when the text states the material ("100% cotton"), `medium` when the text only implies it ("denim jacket"), `low` when guessed from the image or with no hint. If `fabric` is "unknown" or null, the confidence is forced to `low`.
 - **`is_apparel`:** true for clothing, shoes, bags, and wearable accessories (everything the category list covers). For other items Gemini returns false, and most labels come back null, "unknown", or "other".
 - **Main garment:** the prompt uses the product name and breadcrumb to choose which item to label on a model photo (for example "pants" means label the pants, even if a jacket is more visible). The first prompt version labeled the jacket in eval row 2. This rule fixed it.
+- **Target item only (outfit shots):** a user saw a card on a Pacsun page that "analyzed the pants, not the shirt". The cause was the `/analyze` stub, not Gemini: the extension sends only `{name, image_url, price, store, url}`, the stub never calls Part 2, stores `attributes: null`, and its `have_this_look` match is just the oldest closet item ("Black pants"). `/attributes` on the same item ("Carla Ruched Button Up Top", an outfit shot with a pink top, black jeans, a bag and flats) returns shirt, pink, fitted. Part 5 will meet outfit shots with weak names, so Part 2 now guards the target item:
+  - The prompt tells Gemini to label only the item the name, breadcrumb and description describe, and to ignore every other garment. It also returns `target_box_2d` and `other_garments_visible`. Code nulls a box that is out of 0 to 1000, not ordered, or under 30 units (3%) on a side.
+  - Name-first check: `name_category()` maps the name (else the most specific breadcrumb level) to one category with `CATEGORY_KEYWORDS`, which must list every category in `attributes.json`. The last keyword in the name is the garment ("Denim Jacket" is a jacket, "T-Shirt Dress" a dress). Modifier phrases like "short sleeve" and "boot cut" point to no category, text after "with" is ignored, and a name with two garments ("Tee and Shorts Set") or a vague word ("Top", "Sweatshirt") gives no category.
+  - If the name gives a category and Gemini disagrees, Gemini reads once more on the crop of its box (text only when there is no box, no retry when the first read was already text only). If it still disagrees, the name wins: color_family, cut, style and fabric are kept only when the name, breadcrumb or description states them, else null (or "unknown"/"other"), the description is dropped, and the box and crop are dropped. Every conflict is logged. `category_check` reports the path: `agreed`, `fixed_by_crop`, `fixed_by_text`, `forced_from_name`, `no_name_category`.
+  - `target_crop` is a JPEG data URL of the box (5% padding, 600px longest side at most, never upscaled). Store images from the extension are often small (Pacsun sends 300px), so crops can be about 120px wide. A crop can still show something that overlaps the garment, such as a bag strap over a top.
+  - Part 5 calls `understand_target_item(name, image_url, description, breadcrumb, store_text)` and stores `verdict_doc_fields(result)` (`attributes`, `target_crop`) on the verdict doc. `/analyze` is still the stub and does not call Gemini. `understand_item` is an alias, so the Buy anyway auto-add also gets the name check.
+  - Eval: 5 Pacsun outfit shots were added (2 tops, 3 bottoms, including the Carla top). Before and after this change, category and color_family were 7/7 with 0 name conflicts: these store names are strong. The guard is for weak names and outfit shots where Gemini picks the wrong garment.
 - **Output checks:** the reply is checked against `attributes.json` on the server too. A value outside the file counts as a malformed reply and triggers the retry. The description is cut to 25 words.
 - **Retry:** each Gemini attempt has a 20 second timeout. Any API error or malformed reply is retried once. After 2 failures, every attribute is null, `status` is `"attributes_failed"`, and `attribute_string` is an empty string. `/attributes` still returns HTTP 200 in that case, so callers check `status`.
 - **Latency:** with the current `GEMINI_MODEL` (`gemini-3.5-flash-lite`), three image calls to `/attributes` took 1.0 to 1.4 seconds each, image fetch included.

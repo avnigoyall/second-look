@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 
 from backend import models as m
 from backend.auth import current_user
-from backend.services.item_understanding import attribute_string, understand_item
+from backend.services.item_understanding import attribute_string, understand_target_item
 from backend.settings import ATTRIBUTES
 
 router = APIRouter(tags=["attributes"])
@@ -11,8 +11,11 @@ router = APIRouter(tags=["attributes"])
 
 @router.post("/attributes", response_model=m.ItemAttributesResponse)
 def attributes(body: m.AttributesRequest, user=Depends(current_user)):
-    """Gemini reads the item (image if it loads, plus text) into attributes from attributes.json."""
-    attrs = understand_item(body.name, body.image_url, body.description, body.breadcrumb, body.text)
+    """Gemini reads the target item (image if it loads, plus text) into attributes from attributes.json.
+
+    Only the item the name describes is labeled, with a name-first category check. See understand_target_item.
+    """
+    attrs = understand_target_item(body.name, body.image_url, body.description, body.breadcrumb, body.text)
     return {**attrs, "attribute_string": attribute_string(attrs)}
 
 
