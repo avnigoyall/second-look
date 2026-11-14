@@ -272,6 +272,35 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 - Tag before big merges: `git tag pre-integration main`.
 - `python scripts/check_keys.py` verifies MongoDB, Claude, Claude web search (about $0.01), Gemini and Nessie.
 
+## 15. Savings goal (feat/goal) `[DECIDED]` (shapes fixed before build, Nov 14)
+
+Optional. Skipping works the same with or without a goal. One goal per user, no history, no deadlines, no stats.
+
+### Stored
+- User doc: `goal: {name, target_cents, created_at, updated_at}` or absent. `reached` is never stored; it is derived from numbers.
+- Skip verdicts already store `item {name, store, price, image_url, url}`, `action: "skipped"`, `created_at`, and for Nessie users `transfer {status, id, amount_cents, at}`. iMessage verdicts have `item.image_url` null (photo kept as `target_crop`). Seeded demo verdicts add `seeded: true`.
+
+### saved_cents rule
+- `nessie_enabled` users: projected Nessie Savings balance (`available_cents` plus pending incoming credits), the same number `GET /savings` returns as `savings_cents`. Source `"nessie"`.
+- Everyone else, or when Nessie is unavailable: `round(money_kept * 100)`, the local sum of skip prices. Source `"local"`.
+- Nessie reads are cached 15 s per user (shared by `/goal`, `/goal/items` and `/action`'s goal field), so repeated reads stay far under Photon-style rate limits (Nessie allows 120 requests per minute per key).
+- `percent = min(100, floor(saved_cents * 100 / target_cents))`. `reached = saved_cents >= target_cents`.
+
+### Endpoints (JWT)
+- `GET /goal` returns `{goal: null}` or `{goal: {name, target_cents, saved_cents, percent, reached, source: "nessie" | "local"}}`.
+- `PUT /goal` body `{name, target_cents}` creates or updates. `name` trimmed, 1 to 40 characters. `target_cents` integer, 500 to 10000000. Bad input: 422. Returns the same shape as `GET /goal`.
+- `DELETE /goal` removes only the goal (skips, verdicts and Savings untouched). Idempotent. Returns `{goal: null}`.
+- `GET /goal/items` returns `{items: [{verdict_id, name, store, price_cents, image_url, skipped_at, moved_cents}]}`: this user's verdicts with `action == "skipped"`, newest first, at most 100. `price_cents = round(item.price * 100)` or null; `image_url` nullable; `skipped_at` ISO 8601 with "Z" (the verdict's `created_at`; a later action time is not stored); `moved_cents` is `transfer.amount_cents` when `transfer.status == "done"`, else null. Works with or without a goal.
+- `POST /action` adds optional `goal: {name, target_cents, saved_cents, reached}` only when the user has a goal, computed after the skip (for a Nessie user, the projected balance including this transfer when it is done). Absent otherwise. Nothing else in the response changes.
+- All datetimes serialize with "Z" (already true for every API datetime since Nov 14).
+
+### UI
+- Card (extension): after a successful skip, when `goal` is present, one extra line under the skip message: `"$340 of $2,000 for <name>"`, or `"<name>: you made it"` when reached. No goal: card unchanged. No new buttons.
+- Dashboard: `dashboard/goal.js` and `dashboard/goal.css`, mounted by one include in `dashboard/index.html` (Avni owns that file). No goal: one "Set a goal" button at the top. Goal set: a mini bar (`role="progressbar"`, `aria-valuenow`, `aria-valuemin`, `aria-valuemax`) with "$340 / $2,000" inside and a small edit icon beside it. The edit icon opens a small panel (name, target, Save, Delete); Delete asks "Are you sure?" inline, never a browser dialog. Clicking the bar expands a scrollable list of skipped items (photo or neutral tile, name, store, price, date). Reached: the bar fills and reads "<name>: you made it", with one small CSS celebration the first time the UI sees it in a session. A failed `/goal` call hides the component and never breaks the page.
+
+### Demo seeding
+- `scripts/seed_goal_demo.py` (idempotent, `--dry-run`): a fresh Nessie Savings account for the demo user ("Second Look Savings", balance 0), the user doc pointed at it, old accounts untouched; about 15 items from `seed/goal_demo_items.json` (name, store, price_cents, image_url, days_ago) totalling about $1,900, each a real Checking to Savings transfer with description `Second Look skip <verdict_id>` (exact-description search first, so reruns never move money twice) plus a skip verdict with `seeded: true` and a past `created_at`; paced under 100 Nessie requests per minute; Checking topped up if short. Run by Hiresh only, never by agents.
+
 ## 12. Reconciliation log (Nov 14)
 
 | Section | CONTRACT said | Code says | Fixed which |
