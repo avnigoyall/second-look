@@ -388,6 +388,29 @@ const RECORDER = `(() => {
     await sleep(300); await page.screenshot({ path: `${OUT}/8b-confirm-removed.png` });
   }
 
+  // ---- 9. Part 5 card: backend down shows "Second look unavailable" and never blocks the store ----
+  // The service worker's fetch to /analyze is made to fail, as if the server were down.
+  {
+    await sw.evaluate(() => {
+      self.__realFetch = self.__realFetch || self.fetch;
+      self.fetch = (url, opts) => String(url).endsWith("/analyze") ? Promise.reject(new TypeError("Failed to fetch")) : self.__realFetch(url, opts);
+    });
+    const page = await openStore("product-jsonld.html");
+    await page.click("#add");
+    const shown = await card(page).locator(".calm-title").waitFor({ timeout: 10000 }).then(() => true, () => false);
+    const title = shown ? await card(page).locator(".calm-title").textContent() : await card(page).innerText().catch(() => "no card");
+    (title === "Second look unavailable" ? pass : fail)("9. backend down: card says Second look unavailable", title);
+    (await page.title() === "added" ? pass : fail)("9. backend down: store's own add-to-cart handler still ran");
+    (await card(page).locator(".error-box").count() === 0 ? pass : fail)("9. backend down: calm state, not the error box");
+    await sleep(400); await page.screenshot({ path: `${OUT}/9-unavailable.png` });
+    await sw.evaluate(() => { self.fetch = self.__realFetch; });
+    // Try again with the server back: the verdict shows, with its reason.
+    await card(page).getByRole("button", { name: "Try again" }).click();
+    await card(page).locator(".badge").waitFor({ timeout: 15000 });
+    const reason = (await card(page).locator(".reason").textContent()) || "";
+    (reason.trim().length > 0 ? pass : fail)("9. Try again shows the verdict with a reason", reason.slice(0, 80));
+  }
+
   // ---- console errors ----
   (errors.length ? fail : pass)("no console or page errors", errors.join(" | "));
 

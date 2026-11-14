@@ -173,6 +173,8 @@ PW_PATH=/path/to/node_modules/playwright node extension/tests/e2e/e2e.cjs
 
 Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension/tests/e2e/shots/` (git-ignored). Each run signs up a throwaway `e2e<timestamp>@example.com` user.
 
+`extension/tests/card.harness.cjs` checks the verdict card alone, with no backend: it renders `card.js` and `flow.js` on a plain page with a mocked service worker and mock `/analyze` responses for all three verdicts, loading, the small-closet ownership question and "Second look unavailable", at 1280 px and 390 px, light and dark. Run `PW_PATH=/path/to/node_modules/playwright node extension/tests/card.harness.cjs`. Screenshots go to `extension/tests/e2e/shots/card-*.png`.
+
 ### Part 2 attribute eval
 
 `eval/attributes_eval.csv` has the columns `source` (image URL, or image path relative to the project root), `name`, `expected_category`, and `expected_color_family`. It calls the service directly, so no server or login is needed. Target: 90% on category and color_family.

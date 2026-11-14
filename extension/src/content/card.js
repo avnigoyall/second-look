@@ -1,5 +1,7 @@
 // The Second Look card, rendered top right inside the shadow root.
-// States: checking, price (inside checking, when no price was found), verdict, error, paste-a-link.
+// States: checking (calm, with slower copy after 5 s), price (when no price was found), verdict,
+// unavailable (backend down or slow, never blocks the store), error, paste-a-link.
+// A verdict can gain a quiet ownership question for small closets.
 // Plus a small notice used to confirm a removal. This file only draws UI and reports clicks;
 // flow.js decides what happens next.
 (function (global) {
@@ -16,6 +18,9 @@
     alert: svg('<circle cx="12" cy="12" r="9"/><path d="M12 8v4.5M12 16h.01"/>'),
     check: svg('<path d="M20 6 9 17l-5-5"/>'),
     up: svg('<path d="M7 10v11"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.3 7A2 2 0 0 1 17.5 21H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3l4-8a3 3 0 0 1 3 3.9Z"/>'),
+    shirt: svg('<path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23Z"/>', 1.5),
+    external: svg('<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>'),
+    pause: svg('<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>'),
     down: svg('<path d="M17 14V3"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.3-7A2 2 0 0 1 6.5 3H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3l-4 8a3 3 0 0 1-3-3.9Z"/>'),
   };
 
@@ -24,6 +29,9 @@
   let notice = null;
   let noticeTimer = null;
   let onClose = null;
+  let stateTimer = null; // the checking state's "still checking" timer
+
+  const SLOW_AFTER_MS = 5000;
 
   function root() {
     const sr = global.SecondLookShadowHost.root();
@@ -75,6 +83,7 @@
     }
     card.setAttribute("aria-label", `Second Look: ${label}`);
     body.replaceChildren();
+    clearTimeout(stateTimer);
     const previous = onClose; // settle a pending price prompt that a new state replaced
     onClose = null;
     previous?.();
@@ -83,6 +92,7 @@
 
   function hide() {
     if (!card) return;
+    clearTimeout(stateTimer);
     const closing = onClose;
     onClose = null;
     leave(card);
@@ -103,10 +113,12 @@
   function showChecking(item) {
     const b = frame("checking");
     if (item?.name) b.append(itemRow(item));
-    b.append(el("div", { class: "checking", role: "status" }, [
-      el("div", { class: "spinner" }),
-      el("p", { text: "Second Look is checking..." }),
-    ]));
+    const text = el("p", { text: "Second Look is checking..." });
+    b.append(el("div", { class: "checking", role: "status" }, [el("div", { class: "spinner" }), text]));
+    // The engine can take up to about 10 s. Past 5 s, say so calmly. The store is never held.
+    stateTimer = setTimeout(() => {
+      text.textContent = "Still checking. Your cart is not waiting on us.";
+    }, SLOW_AFTER_MS);
   }
 
   // Resolves with a number, null (check without a price), or undefined (card closed).
@@ -156,13 +168,13 @@
     const up = el("button", { class: "btn thumb", "aria-label": "Thumbs up", "aria-pressed": "false", html: ICONS.up });
     const down = el("button", { class: "btn thumb", "aria-label": "Thumbs down", "aria-pressed": "false", html: ICONS.down });
 
-    const alt = result.alternatives?.[0];
+    const actions = el("div", { class: "row" }, [skip, buy, up, down]);
     b.append(
       itemRow(item),
       el("span", { class: `badge ${result.verdict}`, text: LABELS[result.verdict] || result.verdict }),
       el("p", { class: "reason", text: result.reason }),
-      alt ? el("p", { class: "alt" }, [el("b", { text: "Try instead: " }), `${alt.name}${alt.price != null ? ` (${money(alt.price)})` : ""}`]) : "",
-      el("div", { class: "row" }, [skip, buy, up, down]),
+      ...verdictDetails(result),
+      actions,
       status,
     );
 
@@ -194,6 +206,134 @@
     up.addEventListener("click", () => rate("up", up, down));
     down.addEventListener("click", () => rate("down", down, up));
     skip.focus({ preventScroll: true });
+
+    // Lets flow.js add the ownership question later, only while this verdict is still on screen.
+    return {
+      isCurrent: () => actions.isConnected,
+      addOwnership(options, onAnswer) {
+        if (actions.isConnected) b.insertBefore(ownershipBlock(options, onAnswer), actions);
+      },
+    };
+  }
+
+  // ---------- verdict details ----------
+
+  function verdictDetails(r) {
+    const parts = r.verdict === "have_this_look" ? [closetMatches(r)]
+      : r.verdict === "micro_trend" ? [trendBlock(r.matched_trend), renderAlternatives(r.alternatives)]
+      : r.verdict === "good_buy" ? [wearsLine(r)]
+      : [];
+    return parts.filter(Boolean);
+  }
+
+  // Up to 3 closet photos. Older backends send only matched_closet_item, often without image_data.
+  function closetMatches(r) {
+    let items = Array.isArray(r.matched_closet_items) ? r.matched_closet_items.filter(Boolean) : [];
+    if (!items.length && r.matched_closet_item) items = [r.matched_closet_item];
+    items = items.slice(0, 3);
+    if (!items.length) return null;
+    const tiles = items.map((it) => el("li", { class: "closet-tile", title: it.name || null }, [
+      it.image_data
+        ? el("img", { src: it.image_data, alt: it.name || "Closet item" })
+        : el("span", { class: "closet-ph", role: "img", "aria-label": it.name || "Closet item", html: ICONS.shirt }),
+    ]));
+    const best = items[0];
+    return el("div", { class: "closet" }, [
+      el("ul", { class: "closet-strip", "aria-label": "Matching items in your closet" }, tiles),
+      el("div", { class: "closet-text" }, [
+        el("p", { class: "section-label", text: "In your closet" }),
+        best.name ? el("p", { class: "closet-name", text: best.name }) : "",
+        items.length > 1 ? el("p", { class: "closet-more", text: `+${items.length - 1} similar` }) : "",
+      ]),
+    ]);
+  }
+
+  const isHttp = (url) => /^https?:\/\//i.test(url || "");
+
+  // Lifespan labels are shown only next to the source that backs them (CONTRACT section 6).
+  function trendBlock(trend) {
+    if (!trend?.name) return null;
+    const sources = Array.isArray(trend.sources) ? trend.sources.filter((s) => isHttp(s?.url)) : [];
+    const source = sources.find((s) => s.url === trend.lifespan_source_url) || sources[0];
+    const lifespan = source && trend.lifespan_label ? trend.lifespan_label : "";
+    return el("div", { class: "trend" }, [
+      el("p", { class: "trend-head" }, [el("span", { class: "section-label", text: "Trend" }), el("span", { class: "trend-name", text: trend.name })]),
+      lifespan ? el("p", { class: "trend-life", text: lifespan }) : "",
+      source ? el("a", { class: "source", href: source.url, target: "_blank", rel: "noopener noreferrer" }, [
+        el("span", { text: `Source: ${source.title || hostOf(source.url)}` }), el("span", { class: "ext", html: ICONS.external }),
+      ]) : "",
+    ]);
+  }
+
+  // The only place alternatives are drawn, so a different design can replace this one function.
+  function renderAlternatives(alts) {
+    const list = (Array.isArray(alts) ? alts : []).filter((a) => a?.name).slice(0, 3);
+    if (!list.length) return null;
+    return el("div", { class: "alts" }, [
+      el("p", { class: "section-label", text: "Longer-lasting picks" }),
+      el("ul", {}, list.map((a) => {
+        const meta = [money(a.price), isHttp(a.url) ? hostOf(a.url) : ""].filter(Boolean).join(" · ");
+        const text = [el("span", { class: "alt-name", text: a.name }), meta ? el("span", { class: "alt-meta", text: meta }) : ""];
+        return el("li", {}, [isHttp(a.url)
+          ? el("a", { class: "alt-link", href: a.url, target: "_blank", rel: "noopener noreferrer" }, [el("span", { class: "alt-text" }, text), el("span", { class: "ext", html: ICONS.external })])
+          : el("div", { class: "alt-link" }, [el("span", { class: "alt-text" }, text)])]);
+      })),
+    ]);
+  }
+
+  function wearsLine(r) {
+    const parts = [];
+    if (r.expected_wears != null) parts.push(`About ${r.expected_wears} wears`);
+    if (r.cost_per_wear != null) parts.push(`${money(r.cost_per_wear)} per wear`);
+    if (!parts.length) return null;
+    return el("p", { class: "wears" }, [el("span", { text: parts.join(", ") }), el("span", { class: "tag", text: "Estimate" })]);
+  }
+
+  function hostOf(url) {
+    try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
+  }
+
+  // Small-closet question (Part 3): one line and a few chips above the buttons.
+  // onAnswer(option) -> Promise. A null option means "None of these".
+  function ownershipBlock(options, onAnswer) {
+    const box = el("div", { class: "own", role: "group", "aria-label": "Do you own something like this?" });
+    const note = el("p", { class: "own-note", role: "status" });
+    const chips = options.slice(0, 3).map((opt) => el("button", { class: "chip", type: "button", text: opt.label }));
+    const none = el("button", { class: "chip quiet", type: "button", text: "None of these" });
+    const all = [...chips, none];
+    async function pick(opt, button) {
+      all.forEach((c) => { c.disabled = true; });
+      button.setAttribute("aria-busy", "true");
+      note.textContent = "";
+      try {
+        await onAnswer(opt);
+        box.replaceChildren(el("p", { class: "own-done", role: "status", html: ICONS.check }, [
+          el("span", { text: opt ? `Added "${opt.label}" to your closet.` : "Got it. We will learn your closet as you go." }),
+        ]));
+      } catch (err) {
+        all.forEach((c) => { c.disabled = false; });
+        button.removeAttribute("aria-busy");
+        note.textContent = err.message || "Could not save. Try again.";
+      }
+    }
+    chips.forEach((c, i) => c.addEventListener("click", () => pick(options[i], c)));
+    none.addEventListener("click", () => pick(null, none));
+    box.append(el("p", { class: "own-q", text: "Your closet is still small. Own something like this?" }), el("div", { class: "chips" }, all), note);
+    return box;
+  }
+
+  // Backend down or slow. Calm, not an error: the store already handled the click.
+  function showUnavailable({ onRetry } = {}) {
+    const b = frame("unavailable");
+    b.append(el("div", { class: "calm", role: "status", html: ICONS.pause }, [
+      el("div", {}, [
+        el("p", { class: "calm-title", text: "Second look unavailable" }),
+        el("p", { class: "muted small", text: "Your cart is not affected. Go ahead, we will check next time." }),
+      ]),
+    ]));
+    const row = el("div", { class: "row" }, [el("button", { class: "btn secondary", text: "Close", onclick: () => hide() })]);
+    if (onRetry) row.prepend(el("button", { class: "btn secondary", text: "Try again", onclick: onRetry }));
+    b.append(row);
   }
 
   function showError(message, { actionLabel, onAction } = {}) {
@@ -266,5 +406,5 @@
     noticeTimer = setTimeout(() => leave(current), 3500);
   }
 
-  global.SecondLookCard = { showChecking, askPrice, showVerdict, showError, showPaste, showNotice, hide };
+  global.SecondLookCard = { showChecking, askPrice, showVerdict, showUnavailable, showError, showPaste, showNotice, hide };
 })(globalThis);
