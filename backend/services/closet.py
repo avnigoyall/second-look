@@ -12,6 +12,7 @@ from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 
 from backend.db import closet_items
+from backend.services import timing
 from backend.services.embeddings import EmbeddingError, embed_image, embed_text
 from backend.services.item_understanding import attribute_string
 from backend.settings import ATTRIBUTES, ROOT
@@ -105,7 +106,10 @@ def find_matches(user_id: ObjectId, attrs: dict, k: int = 5) -> list[dict]:
     text = attribute_string(attrs)
     if not text:
         return []
-    docs = vector_search(user_id, embed_text(text), attrs.get("category"), k)
+    with timing.stage("embed_ms"):
+        vector = embed_text(text)
+    with timing.stage("vector_search_ms"):
+        docs = vector_search(user_id, vector, attrs.get("category"), k)
     return [{"score": atlas_to_cosine(d["score"]), "id": str(d["_id"]), "name": d["name"],
              "attributes": d.get("attributes"), "status": d.get("status", "owned")} for d in docs]
 

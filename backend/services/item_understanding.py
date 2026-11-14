@@ -19,6 +19,7 @@ from google.genai import types
 from PIL import Image, ImageOps
 
 from backend.images import to_data_url
+from backend.services import timing
 from backend.settings import ATTRIBUTES
 
 log = logging.getLogger("secondlook.item_understanding")
@@ -432,7 +433,9 @@ def extract_attributes(image_bytes: bytes | None, name: str, description: str | 
 
     for attempt in (1, 2):
         try:
-            response = _get_client().models.generate_content(model=model, contents=contents, config=config)
+            timing.count("gemini_attr_calls")
+            with timing.stage("gemini_attributes_ms"):
+                response = _get_client().models.generate_content(model=model, contents=contents, config=config)
             return _clean(response.parsed)
         except ValueError as e:
             log.warning("attributes: malformed Gemini reply on attempt %s: %s", attempt, e)
@@ -495,7 +498,8 @@ def understand_target_item(name: str, image_url: str | None = None, description:
     image_bytes = None
     if image_url:
         try:
-            image_bytes = fetch_image(image_url)
+            with timing.stage("image_fetch_ms"):
+                image_bytes = fetch_image(image_url)
         except ImageFetchError as e:
             log.warning("attributes: image fetch failed, using text only: %s", e)
     return analyze_target(image_bytes, name, description, breadcrumb, store_text)

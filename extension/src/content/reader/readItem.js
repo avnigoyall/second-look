@@ -51,12 +51,14 @@
   async function askGemini(imageUrl) {
     const text = visibleText();
     if (!text) return { error: "page has no visible text" };
+    const started = Date.now();
     const res = await chrome.runtime.sendMessage({
       type: "READ_PAGE",
       payload: { url: location.href, text, image_url: imageUrl || null },
     });
-    if (!res?.ok) return { error: res?.error || "no response" };
-    return { result: res.data };
+    const ms = Date.now() - started;
+    if (!res?.ok) return { ms, error: res?.error || "no response" };
+    return { ms, result: res.data };
   }
 
   // Last price tier. Never throws and never waits longer than CLAUDE_WAIT_MS.

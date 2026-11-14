@@ -1,10 +1,12 @@
 """Second Look API (Part 0: foundation). Run from the project root: uvicorn backend.main:app --reload"""
+import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,11 +40,29 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Second Look API", version="0.1.0", lifespan=lifespan)
 
 # Hackathon, local only: allow every origin so the extension and dashboard can call us.
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+                   expose_headers=["X-Server-Ms", "Server-Timing"])
 app.include_router(attributes_router.router)
 app.include_router(closet_router.router)
 app.include_router(trends_router.router)
 app.include_router(imessage_router.router)
+
+
+# uvicorn configures this logger at INFO, so timing lines show in the server output.
+timing_log = logging.getLogger("uvicorn.error")
+TIMED_PATHS = ("/analyze", "/read-page", "/read-price", "/attributes")
+
+
+@app.middleware("http")
+async def server_time(request: Request, call_next):
+    """X-Server-Ms on every reply: server time from request to response, for the extension's timing line."""
+    started = time.monotonic()
+    response = await call_next(request)
+    ms = int((time.monotonic() - started) * 1000)
+    response.headers["X-Server-Ms"] = str(ms)
+    if request.url.path in TIMED_PATHS:
+        timing_log.info("timing %s server_ms=%d status=%d", request.url.path, ms, response.status_code)
+    return response
 
 
 def now():
@@ -148,9 +168,14 @@ def me(user=Depends(current_user)):
 # ---------- verdict flow ----------
 
 @app.post("/analyze", response_model=m.AnalyzeResponse)
-def analyze(body: m.AnalyzeRequest, user=Depends(current_user)):
-    """Part 5 verdict engine (backend/services/verdict.py). Always answers: failures end in a code-only verdict."""
-    response, _record = decide(user, body.item, save=True)
+def analyze(body: m.AnalyzeRequest, http: Response, user=Depends(current_user)):
+    """Part 5 verdict engine (backend/services/verdict.py). Always answers: failures end in a code-only verdict.
+    Server-Timing lists the engine's stage times (attributes, signals, claude, ...) in ms."""
+    response, record = decide(user, body.item, save=True)
+    timings = record["signals"].get("timings") or {}
+    http.headers["Server-Timing"] = ", ".join(f"{k.removesuffix('_ms')};dur={v}" for k, v in timings.items())
+    timing_log.info("timing /analyze decided_by=%s %s", response.decided_by,
+                    " ".join(f"{k}={v}" for k, v in timings.items()))
     return response
 
 

@@ -23,7 +23,7 @@ from bson import ObjectId
 
 from backend import models as m
 from backend.db import closet_items, trends as trends_collection, verdicts
-from backend.services import verdict_deps
+from backend.services import timing, verdict_deps
 from backend.services.closet import NO_VECTORS, find_matches, thresholds
 from backend.services.item_understanding import fetch_image
 from backend.settings import ROOT
@@ -272,6 +272,7 @@ def ask_claude(payload: dict, images: list[dict]) -> tuple[dict | None, list[str
     errors = []
     for attempt, timeout_s in enumerate(CLAUDE_TIMEOUTS_S, start=1):
         try:
+            timing.count("claude_attempts")
             return call_claude(payload, images, timeout_s), errors
         except Exception as e:  # timeouts, API errors, malformed replies: all end in the fallback
             note = f"attempt {attempt}: {type(e).__name__}: {str(e)[:200]}"
@@ -361,11 +362,11 @@ def gather_signals(user: dict, item: dict, attrs: dict, config: dict) -> dict:
     """Closet matches, trends, closet size and the item photo, fetched in parallel."""
     errors = []
     with ThreadPoolExecutor(max_workers=4) as pool:
-        f_matches = pool.submit(find_matches, user["_id"], attrs, MATCH_K)
-        f_trends = pool.submit(get_trends_for_prompt)
-        f_size = pool.submit(closet_size, user["_id"])
+        f_matches = timing.submit(pool, find_matches, user["_id"], attrs, MATCH_K)
+        f_trends = timing.submit(pool, timed, "trends_ms", get_trends_for_prompt)
+        f_size = timing.submit(pool, timed, "closet_size_ms", closet_size, user["_id"])
         # The item photo is only sent to Claude in the gray band, and only when there is no target crop.
-        f_photo = (pool.submit(fetch_image, item["image_url"])
+        f_photo = (timing.submit(pool, timed, "photo_fetch_ms", fetch_image, item["image_url"])
                    if item.get("image_url") and not item.get("target_crop") else None)
         try:
             matches = f_matches.result()
@@ -389,6 +390,11 @@ def gather_signals(user: dict, item: dict, attrs: dict, config: dict) -> dict:
     category = attrs.get("category")
     trends = [t for t in all_trends if category and t.get("category") == category]
     return {"matches": matches, "trends": trends, "closet_size": size, "photo": photo, "errors": errors}
+
+
+def timed(name: str, fn, *args):
+    with timing.stage(name):
+        return fn(*args)
 
 
 def closet_docs(ids: list[str]) -> dict:
@@ -424,7 +430,7 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
     from backend.main import closet_out, trend_out  # shared converters live in main.py
 
     started = time.monotonic()
-    timings = {}
+    timings = timing.start()
     item = item.model_dump() if isinstance(item, m.Item) else m.Item(**item).model_dump()
     config = thresholds()
     margin = float(config.get("gray_margin", DEFAULT_MARGIN))
@@ -476,7 +482,8 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
 
         # Closet docs for the top matches: photos for the gray band, and the response objects.
         top_ids = [mt["id"] for mt in sorted(matches, key=lambda mt: -mt["score"])][:MAX_MATCHED_ITEMS]
-        docs = closet_docs(top_ids) if zone in ("forced", "gray") else {}
+        with timing.stage("closet_docs_ms"):
+            docs = closet_docs(top_ids) if zone in ("forced", "gray") else {}
         images, labels = [], []
         if zone == "gray":
             item_image = data_url_block(target_crop) if target_crop else (
@@ -581,7 +588,10 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
     }
     verdict_id = "unsaved"
     if save:
+        mark = time.monotonic()
         verdict_id = str(verdicts.insert_one(record).inserted_id)
+        timings["save_ms"] = elapsed_ms(mark)
+    timings["total_ms"] = elapsed_ms(started)
     response = m.AnalyzeResponse(
         status="ok", verdict_id=verdict_id, verdict=verdict, reason=reason,
         matched_closet_item=matched_items[0] if matched_items else None,
@@ -592,4 +602,5 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
     )
     log.info("verdict %s by %s in %d ms (zone %s, allowed %s)", verdict, decided_by, latency_ms,
              signals["zone"], signals["allowed"])
+    log.info("timing analyze %s", " ".join(f"{k}={v}" for k, v in timings.items()))
     return response, record
