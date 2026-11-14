@@ -1,5 +1,5 @@
 // readItem(): tries tier 1 (JSON-LD), tier 2 (meta tags), then tier 3 (Gemini via the service
-// worker) and returns {name, image_url, price, currency, store, url, source_tier, price_source},
+// worker) and returns {name, image_url, price, currency, store, url, description, breadcrumb, source_tier, price_source},
 // or null when no product name can be found. When a name is found but no price, the DOM price
 // reader runs before Gemini. price_source is jsonld, meta, dom, gemini, or null.
 // readItemWithDetails() also returns what each tier saw, for Diagnose.
@@ -59,6 +59,7 @@
       url: global.SecondLookMeta.canonicalUrl(),
       source_tier: t1?.name ? 1 : t2?.name ? 2 : null,
       price_source: t1?.price != null ? "jsonld" : t2?.price != null ? "meta" : null,
+      ...(global.SecondLookDetails?.readDetails() || {}), // description, breadcrumb
     };
 
     // Price check: when JSON-LD or meta gave a price, compare it with the price shown on the

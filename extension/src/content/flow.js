@@ -33,7 +33,10 @@
       item = { ...item, price };
     }
     Card().showChecking(item);
-    const payload = { name: item.name, image_url: item.image_url, price: item.price, store: item.store, url: item.url };
+    const payload = {
+      name: item.name, image_url: item.image_url, price: item.price, store: item.store, url: item.url,
+      description: item.description || null, breadcrumb: item.breadcrumb || null,
+    };
     const result = await send("ANALYZE_ITEM", { item: payload });
     console.log(LOG, "verdict", result.verdict, result);
     Card().showVerdict(item, result, {

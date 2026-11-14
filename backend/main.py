@@ -11,9 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from backend import models as m
-from backend.alternatives import alternatives_for_trend, stored_verdict_alternative
+from backend.alternatives import stored_verdict_alternative
 from backend.auth import check_password, create_token, current_user, hash_password
-from backend.db import client, closet_items, ensure_indexes, trends, users, verdicts
+from backend.db import client, closet_items, ensure_indexes, users, verdicts
 from backend.images import decode_base64_image, to_data_url
 from backend.page_reader import ReadPageError, read_page
 from backend.routers import attributes as attributes_router
@@ -21,6 +21,7 @@ from backend.routers import closet as closet_router
 from backend.routers import trends as trends_router
 from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
 from backend.services.embeddings import EmbeddingError
+from backend.services.verdict import decide
 from backend.settings import ROOT
 
 @asynccontextmanager
@@ -127,56 +128,13 @@ def me(user=Depends(current_user)):
     return {"user": user_out(user)}
 
 
-# ---------- verdict flow (stubs) ----------
-
-VERDICT_CYCLE = ["have_this_look", "micro_trend", "good_buy"]
-
+# ---------- verdict flow ----------
 
 @app.post("/analyze", response_model=m.AnalyzeResponse)
 def analyze(body: m.AnalyzeRequest, user=Depends(current_user)):
-    """STUB: cycles through the three verdicts using this user's verdict count. No AI yet."""
-    verdict = VERDICT_CYCLE[verdicts.count_documents({"user_id": user["_id"]}) % 3]
-    item = body.item
-    matched_closet = matched_trend = None
-    alternatives, outfits, expected_wears = [], [], None
-
-    if verdict == "have_this_look":
-        matched_closet = closet_items.find_one({"user_id": user["_id"]}, sort=[("created_at", 1)])
-        reason = "You already own something very close to this. (Stub reason.)"
-    elif verdict == "micro_trend":
-        matched_trend = trends.find_one({}, sort=[("_id", 1)])
-        reason = "This look is peaking now and will likely fade within a few months. (Stub reason.)"
-        # Every alternative carries a link: the trend's product links, else a store search link.
-        alternatives = [m.Alternative(**a) for a in alternatives_for_trend(
-            matched_trend or {}, fallback_query="classic straight-leg jeans")]
-    else:
-        reason = "This fills a real gap in your closet and pairs with what you own. (Stub reason.)"
-        expected_wears = 30
-        outfits = [m.Outfit(name="Everyday outfit (stub)")]
-
-    cost_per_wear = round(item.price / expected_wears, 2) if item.price and expected_wears else None
-    doc = {
-        "user_id": user["_id"],
-        "item": item.model_dump(),
-        "attributes": None,
-        "verdict": verdict,
-        "reason": reason,
-        "matched_closet_item_id": matched_closet["_id"] if matched_closet else None,
-        "matched_trend_id": matched_trend["_id"] if matched_trend else None,
-        "alternatives": [a.model_dump() for a in alternatives],
-        "expected_wears": expected_wears,
-        "action": "none",
-        "feedback": "none",
-        "created_at": now(),
-    }
-    verdict_id = verdicts.insert_one(doc).inserted_id
-    return m.AnalyzeResponse(
-        status="ok", verdict_id=str(verdict_id), verdict=verdict, reason=reason,
-        matched_closet_item=closet_out(matched_closet, include_image=False) if matched_closet else None,
-        matched_trend=trend_out(matched_trend) if matched_trend else None,
-        alternatives=alternatives, outfits=outfits, expected_wears=expected_wears,
-        cost_per_wear=cost_per_wear,
-    )
+    """Part 5 verdict engine (backend/services/verdict.py). Always answers: failures end in a code-only verdict."""
+    response, _record = decide(user, body.item, save=True)
+    return response
 
 
 @app.post("/action", response_model=m.ActionResponse)
