@@ -13,6 +13,7 @@ ClosetSource = Literal["snap", "auto_add", "ownership_answer", "quick_add",
                        "ingest_photo", "ingest_video", "ingest_text"]
 ClosetStatus = Literal["owned", "incoming"]
 FabricConfidence = Literal["high", "medium", "low"]
+CategoryCheck = Literal["agreed", "fixed_by_crop", "fixed_by_text", "forced_from_name", "no_name_category"]
 
 
 # ---------- shared pieces ----------
@@ -117,6 +118,8 @@ class Verdict(BaseModel):
     action: Literal["none", "skipped", "bought"]
     feedback: Literal["none", "up", "down"]
     created_at: datetime
+    target_crop: str | None = Field(
+        None, description="JPEG data URL of only the target item (understand_target_item). Set by Part 5")
 
 
 # ---------- requests ----------
@@ -216,6 +219,13 @@ class ItemAttributesResponse(BaseModel):
     is_apparel: bool | None = None
     status: Literal["ok", "attributes_failed"]
     attribute_string: str = Field(description="The text Part 3 embeds. Empty when status is attributes_failed")
+    target_box_2d: list[int] | None = Field(
+        None, min_length=4, max_length=4,
+        description="[ymin, xmin, ymax, xmax] 0 to 1000 around the target item. Null when invalid or not trusted")
+    other_garments_visible: bool | None = Field(None, description="The image shows other clothes, shoes or bags")
+    category_check: CategoryCheck | None = Field(
+        None, description="Name-first category check. Null when status is attributes_failed")
+    target_crop: str | None = Field(None, description="JPEG data URL of the target item, 600px longest side at most")
 
     @model_validator(mode="after")
     def check_allowed_values(self):
