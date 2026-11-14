@@ -2,12 +2,12 @@
 
 Status: prepared.
 
-Generated at: 2026-11-14T23:08:57.330297Z.
+Generated at: 2026-11-14T23:35:08.856805Z.
 
 | Measurement | Result |
 | --- | --- |
 | Corpus posts | 24081 |
-| Embedded posts | 0 |
+| Embedded posts | 681 |
 | Prepared Claude queries | 30 |
 | Evaluated held-out queries | 0 |
 | Successful lookups | unmeasured |

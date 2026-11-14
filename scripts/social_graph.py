@@ -10,6 +10,7 @@ import os
 import re
 import sys
 from collections import Counter, defaultdict
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,30 +77,57 @@ def neighbor_pipeline(post, k=10):
                           "score": {"$meta": "vectorSearchScore"}}}]
 
 
-def add_similarity(graph, posts, retrieve, k=10):
+def add_similarity(graph, posts, retrieve, k=10, *, workers=8):
     """Query each post, use ten post neighbors, and collapse each author pair once.
 
     Similarity edges do not accumulate with repeated near-duplicate posts. This
     keeps their author-pair contribution at the requested low weight of 0.2.
     """
+    if workers < 1:
+        raise ValueError("neighbor worker count must be positive")
     enriched = graph.copy()
     pairs = set()
     queries = 0
-    for post in sorted(posts, key=lambda p: p.get("uri", "")):
-        if not post.get("author_hash") or len(post.get("embedding") or []) != 768:
-            continue
-        neighbors = retrieve(neighbor_pipeline(post, k))
-        queries += 1
-        used = 0
-        for neighbor in neighbors:
-            if neighbor.get("uri") == post.get("uri"):
-                continue
-            if used >= k:
-                break
-            used += 1
-            a, b = post["author_hash"], neighbor.get("author_hash")
-            if b and a != b:
-                pairs.add(tuple(sorted((a, b))))
+    eligible = iter(post for post in sorted(posts, key=lambda p: p.get("uri", ""))
+                    if post.get("author_hash") and len(post.get("embedding") or []) == 768)
+
+    def one(post):
+        # Materialize the Atlas cursor inside the worker, so network reads are
+        # concurrent too. Only the main thread mutates the resulting graph.
+        return post, list(retrieve(neighbor_pipeline(post, k)))
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = set()
+
+        def schedule():
+            while len(pending) < workers:
+                post = next(eligible, None)
+                if post is None:
+                    break
+                pending.add(pool.submit(one, post))
+
+        schedule()
+        try:
+            while pending:
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    post, neighbors = future.result()
+                    queries += 1
+                    used = 0
+                    for neighbor in neighbors:
+                        if neighbor.get("uri") == post.get("uri"):
+                            continue
+                        if used >= k:
+                            break
+                        used += 1
+                        a, b = post["author_hash"], neighbor.get("author_hash")
+                        if b and a != b:
+                            pairs.add(tuple(sorted((a, b))))
+                schedule()
+        except Exception:
+            for future in pending:
+                future.cancel()
+            raise
     for a, b in sorted(pairs):
         enriched.add_edge(a, b, key="similarity", type="similarity",
                           kind="similarity", weight=WEIGHTS["similarity"])
@@ -290,12 +318,13 @@ def main():
     parser.add_argument("--allow-small-corpus", action="store_true",
                         help="Use only after the user approves graph work below 3000 posts")
     parser.add_argument("--interaction-only", action="store_true")
+    parser.add_argument("--neighbor-workers", type=int, default=8)
     parser.add_argument("--name-limit", type=int, default=0,
                         help="Explicit maximum Claude naming calls (default 0)")
     parser.add_argument("--output", type=Path, default=Path(".social_runs/social_graph.json"))
     args = parser.parse_args()
-    if args.name_limit < 0:
-        parser.error("name-limit must be nonnegative")
+    if args.name_limit < 0 or args.neighbor_workers < 1:
+        parser.error("name-limit must be nonnegative and neighbor-workers positive")
     from backend.db import db
     count = db["social_posts"].count_documents({})
     if count < 3000 and not args.allow_small_corpus:
@@ -309,7 +338,7 @@ def main():
     base = interaction_graph(posts)
     interaction_stats = graph_stats(base)
     graph, queries = (base, 0) if args.interaction_only else add_similarity(
-        base, posts, db["social_posts"].aggregate)
+        base, posts, db["social_posts"].aggregate, workers=args.neighbor_workers)
     groups = communities(graph)
     summaries = community_summaries(groups, posts)
     cached_names = load_name_cache(db["social_graph_meta"], groups)
@@ -326,7 +355,8 @@ def main():
                              "fallback_community_count": len(groups) - named_count,
                              "corpus_posts": len(posts),
                              "embedded_posts": sum(len(p.get("embedding") or []) == 768 for p in posts),
-                             "similarity_enabled": not args.interaction_only})
+                             "similarity_enabled": not args.interaction_only,
+                             "neighbor_workers": args.neighbor_workers})
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, ensure_ascii=True))
     db["social_graph_meta"].update_one({"_id": "graph"}, {"$set": {"graph": output}}, upsert=True)

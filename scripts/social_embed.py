@@ -135,8 +135,8 @@ def safe_error_report(exc):
 
 
 def embed_posts(collection, embed_one, *, limit=1000, batch_size=32, workers=4,
-                attempts=4, sleep=time.sleep, transient_403_retries=0):
-    """Persist each success immediately; failures remain eligible on the next run.
+                attempts=4, sleep=time.sleep, transient_403_retries=0, on_progress=None):
+    """Flush successful vectors in bounded batches; failures remain resumable.
 
     Do not send a list of posts as Gemini contents: that produces one merged
     multimodal vector with this model rather than one vector per post.
@@ -182,6 +182,7 @@ def embed_posts(collection, embed_one, *, limit=1000, batch_size=32, workers=4,
     with ThreadPoolExecutor(max_workers=workers) as pool:
         def process(rows):
             iterator, pending, fatal = iter(rows), set(), None
+            writes = []
 
             def schedule():
                 while len(pending) < workers and not stop.is_set():
@@ -203,12 +204,23 @@ def embed_posts(collection, embed_one, *, limit=1000, batch_size=32, workers=4,
                     if vector is None:
                         report["failed"] += bool(calls)
                         continue
-                    collection.update_one({"uri": post["uri"]}, {"$set": {
+                    writes.append(({"uri": post["uri"]}, {"$set": {
                         "embedding": vector, "embedding_model": MODEL,
                         "embedded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    }})
-                    report["embedded"] += 1
+                    }}))
                 schedule()
+            if writes:
+                bulk_write = getattr(collection, "bulk_write", None)
+                if callable(bulk_write):
+                    from pymongo import UpdateOne
+                    bulk_write([UpdateOne(query, update) for query, update in writes], ordered=False)
+                else:
+                    # Small offline fakes can preserve the original minimal API.
+                    for query, update in writes:
+                        collection.update_one(query, update)
+                report["embedded"] += len(writes)
+            if on_progress is not None:
+                on_progress(dict(report))
             if fatal:
                 raise EmbeddingJobStopped(report, fatal)
         # Mongo limit(0) means unlimited, so handle a zero request budget here.
@@ -250,7 +262,8 @@ def main():
         from backend.services.embeddings import embed_text
         report.update(embed_posts(posts, embed_text, limit=args.limit,
                                   workers=args.workers, batch_size=args.batch_size,
-                                  transient_403_retries=args.transient_403_retries))
+                                  transient_403_retries=args.transient_403_retries,
+                                  on_progress=lambda progress: print(json.dumps({"status": "progress", **progress}), flush=True)))
     if args.create_index or args.index_only:
         report["index_ready"] = ensure_vector_index(posts)
     print(json.dumps(report))

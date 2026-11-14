@@ -11,3 +11,9 @@ extension/tests/e2e/shots/
 .social_runs/
 extension/tests/e2e/.tmp/
 .claude/worktrees/
+
+# Local feasibility probes and secret
+backend/.env
+scripts/out/
+scripts/pinterest_probe.py
+scripts/wayback_probe.py

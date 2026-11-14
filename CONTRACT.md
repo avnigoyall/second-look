@@ -2,6 +2,16 @@
 
 ## Social Trend Radar shared contract [DECIDED]
 
+### Vultr Social-only provider amendment (latest)
+
+Social Radar defaults to SOCIAL_EMBED_PROVIDER=vultr, with gemini retained as an explicit alternative. backend/services/social_embeddings.py owns the Social-only provider abstraction and reads VULTR_API_KEY, VULTR_EMBED_MODEL and VULTR_BASE_URL from ignored backend/.env. No credential values may be logged or committed. Keep backend/services/embeddings.py and every closet path identical to main. Vultr base is https://api.vultrinference.com/v1, POST /embeddings, model qwen3-embedding-4b; GET /embeddings/models and live dimension/batch probes establish supported parameters. Choose a verified 768- or 1024-dimensional output if supported; otherwise record the real dimension and limitation.
+
+Vultr vectors use embedding_vultr, embedding_model (actual model), and dims (actual dimensions). Preserve old Gemini vectors in embedding. A separate social_posts_vultr_vector Atlas index uses embedding_vultr and the selected dimensions, with term and created_at filters. Query embedding, retrieval, graph neighbors and evaluation must select the same provider/field/index/dimensions, never mix models. Gemini compatibility checks must inspect vector-field provenance rather than assume the shared embedding_model still denotes Gemini.
+
+Runtime social_context has an overall deadline below 0.5 seconds and returns null on timeout or provider failure. Cache behavior remains ten minutes. Native Vultr batching uses a list of inputs only after a live probe verifies one result per input, order, dimensions and normalization. Batch and rate limits must be reported as verified, documented or unknown; absence of rate headers does not establish unlimited quota. Respect Retry-After and bounded exponential backoff for transient errors. Authentication failures stop promptly.
+
+Main probes the service without exposing keys, records the live dimensions, tests throughput on 100 posts and estimates full-corpus duration before starting the resumable full job. This model/provider change is an explicit Contract deviation from the original Gemini-only Social plan; closet embeddings remain unchanged.
+
 ### Latest window-audit amendment (supersedes earlier sampling limits)
 
 The user's latest cap is 35000 unique posts, superseding the initial 25000 and the intervening request for 40000. Reserve remaining capacity for ten user-provided press_status seeds before resuming other collection. press_status and press sources/dates are evaluation metadata, never classifier inputs. The exact seed rows are pending because they are absent from this thread's received context and repository; do not invent them.

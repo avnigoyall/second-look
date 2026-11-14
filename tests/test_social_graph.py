@@ -1,5 +1,7 @@
 """Graph tests are deterministic and never contact Bluesky, Atlas, or models."""
 import unittest
+import time
+from threading import Barrier, Lock
 from unittest.mock import Mock, patch
 
 import networkx as nx
@@ -12,6 +14,51 @@ def post(uri, author, **fields):
 
 
 class GraphTests(unittest.TestCase):
+    def test_neighbor_queries_are_bounded_concurrent_and_results_stable(self):
+        posts = [post(str(i), "a" + str(i), embedding=[float(i)] * 768) for i in range(12)]
+        base = graph.interaction_graph(posts)
+        lock, barrier = Lock(), Barrier(3)
+        active = peak = calls = 0
+        def retrieve(pipeline):
+            nonlocal active, peak, calls
+            index = int(pipeline[0]["$vectorSearch"]["queryVector"][0])
+            # Return a lazy iterator to check that cursor consumption stays in
+            # worker threads instead of serializing network reads in the caller.
+            def cursor():
+                nonlocal active, peak, calls
+                with lock:
+                    active += 1; peak = max(peak, active); calls += 1
+                if index < 3:
+                    barrier.wait(timeout=2)
+                time.sleep((3 - index % 3) * .001)
+                try:
+                    yield {"uri": str(index), "author_hash": "a" + str(index)}
+                    yield {"uri": str((index + 1) % 12), "author_hash": "a" + str((index + 1) % 12)}
+                finally:
+                    with lock:
+                        active -= 1
+            return cursor()
+        parallel, count = graph.add_similarity(base, posts, retrieve, workers=3)
+        self.assertEqual(count, 12)
+        self.assertEqual(calls, 12)
+        self.assertEqual(peak, 3)
+        def serial_retrieve(pipeline):
+            index = int(pipeline[0]["$vectorSearch"]["queryVector"][0])
+            return [{"uri": str((index + 1) % 12), "author_hash": "a" + str((index + 1) % 12)}]
+        serial, serial_count = graph.add_similarity(base, list(reversed(posts)), serial_retrieve, workers=1)
+        self.assertEqual(serial_count, 12)
+        self.assertEqual(list(parallel.edges(data=True)), list(serial.edges(data=True)))
+        self.assertEqual(graph.communities(parallel), graph.communities(serial))
+
+    def test_failed_neighbor_query_aborts_without_mutating_source(self):
+        posts = [post(str(i), "a" + str(i), embedding=[float(i)] * 768) for i in range(20)]
+        base = graph.interaction_graph(posts)
+        retrieve = Mock(side_effect=RuntimeError("safe fake failure"))
+        with self.assertRaises(RuntimeError):
+            graph.add_similarity(base, posts, retrieve, workers=3)
+        self.assertLessEqual(retrieve.call_count, 3)
+        self.assertEqual(base.number_of_edges(), 0)
+
     def test_interaction_only_export_does_not_invent_similarity_measurements(self):
         source = graph.interaction_graph([post("1", "a")])
         groups = graph.communities(source)

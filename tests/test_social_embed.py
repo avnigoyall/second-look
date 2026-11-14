@@ -28,7 +28,60 @@ class Collection:
         self.writes.append((query, update))
 
 
+class BulkCollection(Collection):
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.bulk_requests = []
+
+    def bulk_write(self, operations, *, ordered):
+        self.bulk_requests.append((operations, ordered))
+
+
 class EmbedTests(unittest.TestCase):
+    def test_batch_bulk_write_preserves_independent_vectors_and_safe_progress(self):
+        rows = [{"uri": str(i), "text": "post " + str(i)} for i in range(64)]
+        collection, progress = BulkCollection(rows), []
+        one = Mock(return_value=[1.0] * 768)
+        result = embed.embed_posts(collection, one, limit=64, batch_size=32, workers=8,
+                                   on_progress=progress.append)
+        self.assertEqual(one.call_count, 64)
+        self.assertEqual({call.args[0] for call in one.call_args_list}, {row["text"] for row in rows})
+        self.assertEqual(len(collection.bulk_requests), 2)
+        self.assertEqual(collection.writes, [])
+        self.assertEqual([row["embedded"] for row in progress], [32, 64])
+        self.assertEqual(result["embedded"], 64)
+        for operations, ordered in collection.bulk_requests:
+            self.assertFalse(ordered)
+            self.assertEqual(len(operations), 32)
+            for operation in operations:
+                self.assertIn(operation._filter["uri"], {row["uri"] for row in rows})
+                fields = operation._doc["$set"]
+                self.assertEqual(fields["embedding_model"], "gemini-embedding-2")
+                self.assertEqual(len(fields["embedding"]), 768)
+                self.assertAlmostEqual(sum(value * value for value in fields["embedding"]), 1)
+                self.assertTrue(fields["embedded_at"].endswith("Z"))
+        self.assertNotIn("uri", json.dumps(progress))
+        self.assertNotIn("post ", json.dumps(progress))
+
+    def test_fatal_response_drains_and_bulk_flushes_inflight_success(self):
+        collection = BulkCollection([{"uri": str(i), "text": str(i)} for i in range(32)])
+        barrier, progress = Barrier(2), []
+        def one(text):
+            barrier.wait(timeout=2)
+            if text == "0":
+                error = RuntimeError("secret provider text")
+                error.code = 401
+                raise error
+            time.sleep(.01)
+            return [1.0] * 768
+        with self.assertRaises(embed.EmbeddingJobStopped) as captured:
+            embed.embed_posts(collection, one, limit=32, workers=2, on_progress=progress.append)
+        self.assertEqual(len(collection.bulk_requests), 1)
+        self.assertEqual(collection.bulk_requests[0][0][0]._filter, {"uri": "1"})
+        self.assertEqual(captured.exception.report["embedded"], 1)
+        self.assertEqual(captured.exception.report["model_calls"], 2)
+        self.assertEqual(progress[-1]["embedded"], 1)
+
     def test_opt_in_transient_403_retries_then_succeeds(self):
         collection = Collection([{"uri": "a", "text": "cargo pants"}])
         error = RuntimeError("secret provider message")
