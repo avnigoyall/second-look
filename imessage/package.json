@@ -19,12 +19,8 @@
   },
   "homepage": "https://github.com/avnigoyall/Second-Look#readme",
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.8.0",
-    "@google/genai": "^3.3.0",
     "@photon-ai/api": "^0.5.0",
     "heic-convert": "^2.1.0",
-    "mongodb": "^7.9.0",
-    "sharp": "^0.35.5",
-    "zod": "^4.6.7"
+    "sharp": "^0.35.5"
   }
 }

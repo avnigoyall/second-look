@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Photon } from "@photon-ai/api";
 import { env } from "./config.mjs";
-import { sniffMime } from "./embed.mjs";
+import { sniffMime } from "./image.mjs";
 
 export const photon = new Photon({ headers: { Authorization: `Bearer ${env.PHOTON_API_KEY}` } });
 const path = () => ({ id: env.PHOTON_PROJECT_ID });

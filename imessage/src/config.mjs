@@ -1,21 +1,23 @@
-// Reads and validates environment variables. Import `env` and call `requireEnv` for the vars a script needs.
+// Environment. Secrets come from the repo-root .env (shared with backend/), with the shell as a fallback.
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const rootEnv = fileURLToPath(new URL("../../.env", import.meta.url));
+if (existsSync(rootEnv)) process.loadEnvFile(rootEnv); // does not override variables already set in the shell
+
 export const env = {
   PHOTON_PROJECT_ID: process.env.PHOTON_PROJECT_ID,
   PHOTON_API_KEY: process.env.PHOTON_API_KEY,
   PHOTON_PLATFORM: process.env.PHOTON_PLATFORM ?? "imessage",
   PHOTON_AGENT_HANDLE: process.env.PHOTON_AGENT_HANDLE,
-  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
-  EMBED_MODEL: process.env.EMBED_MODEL ?? "gemini-embedding-2",
-  EMBED_DIMS: Number(process.env.EMBED_DIMS ?? 1536), // must match the Atlas vector indexes (scripts/setup-mongo.mjs)
-  ANTHROPIC_MODEL: process.env.SECOND_LOOK_MODEL ?? "claude-opus-5-5",
-  MONGODB_URI: process.env.MONGODB_URI,
-  MONGODB_DB: process.env.MONGODB_DB ?? "second_look",
+  SECOND_LOOK_API: (process.env.SECOND_LOOK_API ?? "http://localhost:8000").replace(/\/$/, ""),
+  IMESSAGE_AGENT_SECRET: process.env.IMESSAGE_AGENT_SECRET,
 };
 
 export function requireEnv(...names) {
   const missing = names.filter((n) => !env[n]);
   if (missing.length) {
-    console.error(`Missing env vars: ${missing.join(", ")}. Add them to ~/.bash_profile, then: source ~/.bash_profile`);
+    console.error(`Missing env vars: ${missing.join(", ")}. Put them in the repo-root .env (see imessage/.env.example).`);
     process.exit(1);
   }
 }

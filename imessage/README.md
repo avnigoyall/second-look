@@ -1,70 +1,69 @@
 # Second Look over iMessage (Photon)
 
-A shopper texts a photo of a clothing item to the agent's iMessage number. The agent replies with:
+A shopper texts a photo of a clothing item to the agent's iMessage number. The agent sends the photo to the
+Second Look backend, which runs the same verdict engine as the extension (`decide` in
+`backend/services/verdict.py`), and texts the verdict back: `have_this_look`, `micro_trend` or `good_buy`.
 
-1. What the item is, its likely material and a quality read (Claude vision).
-2. Whether it looks like something already in their closet (Gemini image embeddings + MongoDB Atlas Vector Search).
-3. Whether it matches a micro trend from the curated trend library, and the trend's stage.
-
-It then asks "Do you already own this?". A "yes" adds the item to that person's closet.
-
-This folder is a standalone Node.js app. It does not depend on `backend/`.
+This folder holds only the iMessage channel. All shopping logic (attributes, closet matching, trends,
+verdicts) lives in `backend/`. The agent talks to it through `backend/routers/imessage.py`.
 
 ## Flow
 
 ```
 iMessage photo -> Photon -> poll.mjs -> handle-message.mjs
-  -> image.mjs      convert HEIC/AVIF/WebP to JPEG, resize
-  -> analyze.mjs    Claude: attributes JSON + bounding box of the garment
-  -> embed.mjs      Gemini embedding of the cropped garment (1536 dims)
-  -> db.mjs         $vectorSearch: owned closet items + trend examples
-  -> respond.mjs    Claude writes the reply from attributes + candidates
-  -> photon.mjs     send reply
+  -> image.mjs        HEIC/AVIF/WebP -> JPEG (the backend's Pillow cannot read HEIC or AVIF)
+  -> backend.mjs      POST /imessage/analyze {phone, image_base64, text}
+       backend        phone -> users.phone -> decide(user, item) -> verdict doc (channel "imessage")
+  -> photon.mjs       text back `message`, plus "Do you already own this?" when ask_ownership is true
+"yes" / "no"  ->      POST /imessage/own  -> closet_items (source ownership_answer, image from target_crop)
+an email      ->      POST /imessage/link -> sets users.phone for that account
 ```
+
+A phone must be linked to a Second Look account once. The first photo from an unknown number gets
+"reply with the email you use for Second Look". Linking trusts the texter (fine for the demo, see Known limits).
 
 ## Setup
 
-Requires Node.js 24+.
+Requires Node.js 24+ and the backend (see the root README).
 
-1. Set the variables in `.env.example` in your shell (for example in `~/.bash_profile`). Do not commit real values.
-2. Install dependencies and create the MongoDB indexes:
+1. Root `.env` (shared with the backend) needs, besides the backend's own keys:
+   - `IMESSAGE_AGENT_SECRET`: any long random string. The backend and the agent must use the same value.
+   - `GEMINI_MODEL` and `CLAUDE_MODEL`: the backend needs both for verdicts (team values: `gemini-3.5-flash-lite`, `claude-haiku-5-5`).
+2. Photon variables from `imessage/.env.example`, in your shell or the root `.env`.
+3. In the Photon dashboard, add the iMessage number you will text from and assign a shared-pool number to the
+   project. Text the agent first. A shared line cannot send the first message.
 
-   ```bash
-   cd imessage
-   npm install
-   node scripts/setup-mongo.mjs
-   ```
-
-3. In the Photon dashboard, add the iMessage number you will text from and assign a shared-pool number to the project. Text the agent first. A shared line cannot send the first message.
+```bash
+cd imessage && npm install
+```
 
 ## Run
 
-```bash
-node src/poll.mjs                         # the agent: polls Photon every 3 s
-node src/analyze.mjs photo.jpg            # Claude analysis of one local photo
-node src/embed.mjs photo.jpg              # Gemini embedding of one local photo
-node test-imessage.mjs "hello"            # send one test message
-```
-
-## Trend library
+Two processes, from the repo root:
 
 ```bash
-node scripts/add-trend.mjs "Barrel-leg jeans" peak "Curved, cocoon-shaped denim" a.jpg b.jpg
+# 1. backend (on macOS with the python.org Python, point it at certifi's CA bundle or Atlas TLS fails)
+SSL_CERT_FILE="$(.venv/bin/python -m certifi)" .venv/bin/uvicorn backend.main:app --port 8000
+
+# 2. agent
+cd imessage && node src/poll.mjs
 ```
 
-Stages: `emerging`, `peak`, `fading`, `staple`. Optional env: `TREND_CATEGORY`, `TREND_STARTED`, `TREND_PEAKED` (YYYY-MM-DD).
+`SECOND_LOOK_API` (default `http://localhost:8000`) points the agent at another backend.
+`node test-imessage.mjs "hello"` sends one test message.
 
-## Maintenance
+## Backend additions (for CONTRACT.md)
 
-- `node scripts/reembed.mjs --all` re-embeds every item and trend example. Run it after changing `EMBED_MODEL` or `EMBED_DIMS`, after `node scripts/setup-mongo.mjs` (which resizes the vector indexes).
-
-## Data (MongoDB database `second_look`)
-
-- `items`: one document per texted photo. `status` is `pending`, `owned` or `considered`. Holds `attributes`, `image_embedding`, `text_embedding`, `photo_id`.
-- `trends`, `trend_examples`: the curated micro-trend library.
-- GridFS bucket `photos`: the original photos.
+- `backend/routers/imessage.py`: `POST /imessage/link`, `/imessage/analyze`, `/imessage/own`. Header `X-Agent-Secret`.
+- `users.phone`: optional, unique sparse index.
+- Verdict docs from iMessage get `channel: "imessage"` and `ownership: "yes" | "no"` after the answer.
+  `item.image_url` is set to null after saving (the photo is kept as `target_crop`).
+- `fetch_image()` also accepts `data:image/...` URLs.
+- `python-multipart` added to `backend/requirements.txt` (the closet router needs it; it was missing).
 
 ## Known limits
 
 - Polling is for local development. Production should use a Photon webhook.
-- Matching scores are not calibrated on a labeled set. Claude makes the final same/similar call from the top 3 candidates.
+- Linking a phone trusts the texter to name their own email. Replace with a confirmation code before real users.
+- A closet item added by "yes" takes a few seconds to appear in Atlas Vector Search. A photo of the same
+  item sent right after can miss it.

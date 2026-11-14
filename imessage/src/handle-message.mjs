@@ -1,79 +1,69 @@
-import { analyzeImage } from "./analyze.mjs";
-import { alreadyProcessed, latestPending, matchCloset, matchTrends, saveItem, setStatus, uploadPhoto } from "./db.mjs";
-import { embedImage, embedText } from "./embed.mjs";
-import { cropToBox, normalizeImage } from "./image.mjs";
+// Routes one received iMessage. All shopping logic lives in the backend (POST /imessage/*).
+import { analyzePhoto, answerOwnership, linkPhone, NotLinkedError } from "./backend.mjs";
+import { toJpeg } from "./image.mjs";
 import { downloadAttachment, parseContent, reply } from "./photon.mjs";
-import { composeReply } from "./respond.mjs";
 
 const YES = /^(y|yes|yeah|yep|yup|i do|i own it|own it)\b/i;
 const NO = /^(n|no|nope|nah|i don'?t)\b/i;
-const handled = new Set(); // in-memory guard for text replies (photos are guarded by the DB unique key)
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const LINK_PROMPT =
+  "Hi! I'm Second Look. To check photos against your closet, reply with the email you use for Second Look.";
+const HELP =
+  "Send me a photo of something you're thinking about buying. I'll check it against your closet and current micro trends.";
+
+const handled = new Set(); // the poller re-reads the newest message each cycle; handle each id once
 
 /** Handle one received Photon message. */
 export async function handleMessage(msg) {
   if (handled.has(msg.id)) return;
   handled.add(msg.id);
 
-  const userId = msg.sentBy.id;
+  const phone = msg.sentBy.handle;
   const spaceId = msg.space.id;
   const { text, attachmentIds } = parseContent(msg.content);
 
-  if (attachmentIds.length) {
-    if (await alreadyProcessed(msg.id)) return;
-    return handlePhoto({ msg, userId, spaceId, text, attachmentId: attachmentIds[0] });
-  }
+  if (attachmentIds.length) return handlePhoto({ msg, phone, spaceId, text, attachmentId: attachmentIds[0] });
   if (!text) return; // read receipts, typing, etc.
 
-  const pending = await latestPending(userId);
-  if (pending && YES.test(text)) {
-    await setStatus(pending.id, "owned");
-    return reply(spaceId, `Added the ${pending.attributes.subcategory} to your closet 👍 I'll flag lookalikes next time.`);
+  if (EMAIL.test(text)) {
+    const res = await linkPhone(phone, text);
+    return reply(spaceId, res.linked
+      ? `Linked to ${res.email}. Now send me a photo of something you're thinking about buying.`
+      : "I couldn't find a Second Look account with that email. Sign up in the extension first, then send it again.");
   }
-  if (pending && NO.test(text)) {
-    await setStatus(pending.id, "considered");
-    return reply(spaceId, "Got it, not in your closet. Send another photo whenever you're deciding on something.");
+
+  if (YES.test(text) || NO.test(text)) {
+    try {
+      const res = await answerOwnership(phone, YES.test(text));
+      return reply(spaceId, res.message);
+    } catch (err) {
+      if (err instanceof NotLinkedError) return reply(spaceId, LINK_PROMPT);
+      throw err;
+    }
   }
-  return reply(spaceId, "Send me a photo of something you're thinking about buying, and I'll tell you what it's made of, how well it's made, if you already own something like it, and whether it's a passing micro trend.");
+  return reply(spaceId, HELP);
 }
 
-async function handlePhoto({ msg, userId, spaceId, text, attachmentId }) {
+async function handlePhoto({ msg, phone, spaceId, text, attachmentId }) {
   const download = await downloadAttachment(attachmentId);
-  let buffer, mime, sourceMime;
+  let jpeg;
   try {
-    ({ buffer, mime, sourceMime } = await normalizeImage(download.buffer, download.mime));
+    const { buffer, sourceMime } = await toJpeg(download.buffer, download.mime);
+    jpeg = buffer;
+    console.log(`[${msg.id}] ${sourceMime} -> jpeg, ${(download.buffer.length / 1024) | 0} KB -> ${(jpeg.length / 1024) | 0} KB`);
   } catch (err) {
     console.error(`[${msg.id}] could not decode ${download.mime}:`, err.message);
     return reply(spaceId, "I couldn't open that file. Could you send it as a photo or screenshot instead?");
   }
 
-  console.log(`[${msg.id}] analyzing ${sourceMime} → jpeg (${(download.buffer.length / 1024).toFixed(0)} KB → ${(buffer.length / 1024).toFixed(0)} KB)`);
-  const attributes = await analyzeImage(buffer, mime, text);
-  if (!attributes.is_clothing_or_accessory) {
-    return reply(spaceId, "That doesn't look like clothing or an accessory, which is all I can help with. Send me a photo of a piece you're considering!");
+  try {
+    const res = await analyzePhoto(phone, jpeg, text);
+    console.log(`[${msg.id}] verdict ${res.verdict} (${res.verdict_id})`);
+    const ask = res.ask_ownership ? "\n\nDo you already own this? Reply yes or no." : "";
+    return reply(spaceId, res.message + ask);
+  } catch (err) {
+    if (err instanceof NotLinkedError) return reply(spaceId, LINK_PROMPT + " Then send the photo again.");
+    throw err;
   }
-
-  // Embed only the garment (screenshots carry phone UI, models and backgrounds that swamp similarity).
-  const imageEmbedding = await embedImage(await cropToBox(buffer, attributes.item_box));
-  const [textEmbedding, closet, trends] = await Promise.all([
-    embedText(attributes.description),
-    matchCloset(imageEmbedding, userId, attributes.category),
-    matchTrends(imageEmbedding),
-  ]);
-  console.log(`[${msg.id}] ${attributes.subcategory}; closet top ${closet[0]?.similarity?.toFixed(3) ?? "-"}, trend top ${trends[0] ? `${trends[0].name} ${trends[0].similarity.toFixed(3)}` : "-"}`);
-
-  const ext = mime.split("/")[1].replace("jpeg", "jpg");
-  const photoId = await uploadPhoto(`${userId}/${msg.id}.${ext}`, buffer, mime, { user_id: userId, photon_message_id: msg.id });
-  await saveItem({
-    photon_message_id: msg.id,
-    user_id: userId,
-    space_id: spaceId,
-    photo_id: photoId,
-    attributes,
-    category: attributes.category,
-    quality_score: attributes.quality_score,
-    image_embedding: imageEmbedding,
-    text_embedding: textEmbedding,
-  });
-
-  await reply(spaceId, await composeReply({ attributes, closet, trends }));
 }

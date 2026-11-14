@@ -1,19 +1,16 @@
 // Local dev loop: polls Photon for new received messages and handles each one.
 // Run: node src/poll.mjs   (Ctrl+C to stop)
-import { requireEnv } from "./config.mjs";
+import { env, requireEnv } from "./config.mjs";
 import { handleMessage } from "./handle-message.mjs";
 import { getAgent, listReceived, reply } from "./photon.mjs";
 
-requireEnv(
-  "PHOTON_PROJECT_ID", "PHOTON_API_KEY", "PHOTON_AGENT_HANDLE",
-  "GEMINI_API_KEY", "MONGODB_URI",
-);
+requireEnv("PHOTON_PROJECT_ID", "PHOTON_API_KEY", "PHOTON_AGENT_HANDLE", "IMESSAGE_AGENT_SECRET");
 
 const INTERVAL_MS = 3000;
 let since = new Date().toISOString(); // only messages that arrive after startup
 
 const agent = await getAgent();
-console.log(`Second Look listening on ${agent.handle} (polling every ${INTERVAL_MS / 1000}s). Text it a photo.`);
+console.log(`Second Look listening on ${agent.handle} (polling every ${INTERVAL_MS / 1000}s), backend ${env.SECOND_LOOK_API}. Text it a photo.`);
 
 for (;;) {
   try {

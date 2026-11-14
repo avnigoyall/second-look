@@ -6,6 +6,7 @@ Store photos often show a model in a full outfit. Gemini labels only the target 
 describes) and returns a box around it. A name-first check in code catches the case where Gemini labeled
 another garment: see understand_target_item().
 """
+import base64
 import io
 import logging
 import math
@@ -134,7 +135,21 @@ def resize_image(raw: bytes) -> bytes:
 
 
 def fetch_image(url: str) -> bytes:
-    """Download an image URL and return resized JPEG bytes. Raises ImageFetchError on any failure."""
+    """Download an image URL and return resized JPEG bytes. Raises ImageFetchError on any failure.
+
+    Also accepts a data:image/... URL (photos texted to the iMessage agent arrive as bytes, not links).
+    """
+    if url.lower().startswith("data:image/"):
+        try:
+            raw = base64.b64decode(url.split(",", 1)[1])
+        except Exception as e:
+            raise ImageFetchError("data URL is not valid base64") from e
+        if len(raw) > IMAGE_MAX_BYTES:
+            raise ImageFetchError("image is larger than 15 MB")
+        try:
+            return resize_image(raw)
+        except Exception as e:
+            raise ImageFetchError("unreadable image in data URL") from e
     if not url.lower().startswith(("http://", "https://")):
         raise ImageFetchError("only http and https image URLs are supported")
     try:
