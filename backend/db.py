@@ -19,6 +19,7 @@ closet_items = db["closet_items"]
 trends = db["trends"]
 verdicts = db["verdicts"]
 ingest_jobs = db["ingest_jobs"]
+imessage_messages = db["imessage_messages"]  # per-account iMessage turns (backend/services/account_context.py)
 
 
 def ensure_indexes():
@@ -28,4 +29,5 @@ def ensure_indexes():
     closet_items.create_index([("user_id", ASCENDING), ("created_at", ASCENDING)])
     closet_items.create_index([("source_verdict_id", ASCENDING)], unique=True, sparse=True)  # one auto-add per verdict
     ingest_jobs.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    imessage_messages.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     ensure_trend_indexes(trends)

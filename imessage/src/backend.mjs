@@ -30,3 +30,6 @@ export const analyzePhoto = (phone, jpeg, text) =>
 
 /** Answer "do you already own this?" for the latest iMessage verdict. Returns { ok, message }. */
 export const answerOwnership = (phone, owns) => post("/imessage/own", { phone, owns });
+
+/** Answer any other text from this account's closet, savings, verdicts and recent messages. Returns { message }. */
+export const askQuestion = (phone, text) => post("/imessage/ask", { phone, text });

@@ -1,16 +1,11 @@
 // Routes one received iMessage. All shopping logic lives in the backend (POST /imessage/*).
-import { analyzePhoto, answerOwnership, linkPhone, NotLinkedError } from "./backend.mjs";
+import { analyzePhoto, answerOwnership, askQuestion, linkPhone, NotLinkedError } from "./backend.mjs";
 import { toJpeg } from "./image.mjs";
 import { downloadAttachment, parseContent, reply } from "./photon.mjs";
-
-const YES = /^(y|yes|yeah|yep|yup|i do|i own it|own it)\b/i;
-const NO = /^(n|no|nope|nah|i don'?t)\b/i;
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+import { routeMessage } from "./route.mjs";
 
 const LINK_PROMPT =
-  "Hi! I'm Second Look. To check photos against your closet, reply with the email you use for Second Look.";
-const HELP =
-  "Send me a photo of something you're thinking about buying. I'll check it against your closet and current micro trends.";
+  "Hi! I'm Second Look. To check photos against your closet and answer questions about your account, reply with the email you use for Second Look.";
 
 const handled = new Set(); // the poller re-reads the newest message each cycle; handle each id once
 
@@ -23,26 +18,26 @@ export async function handleMessage(msg) {
   const spaceId = msg.space.id;
   const { text, attachmentIds } = parseContent(msg.content);
 
-  if (attachmentIds.length) return handlePhoto({ msg, phone, spaceId, text, attachmentId: attachmentIds[0] });
-  if (!text) return; // read receipts, typing, etc.
+  const route = routeMessage(text, attachmentIds.length > 0);
+  if (route.kind === "photo") return handlePhoto({ msg, phone, spaceId, text, attachmentId: attachmentIds[0] });
+  if (route.kind === "ignore") return; // read receipts, typing, etc.
 
-  if (EMAIL.test(text)) {
+  if (route.kind === "link") {
     const res = await linkPhone(phone, text);
     return reply(spaceId, res.linked
       ? `Linked to ${res.email}. Now send me a photo of something you're thinking about buying.`
       : "I couldn't find a Second Look account with that email. Sign up in the extension first, then send it again.");
   }
 
-  if (YES.test(text) || NO.test(text)) {
-    try {
-      const res = await answerOwnership(phone, YES.test(text));
-      return reply(spaceId, res.message);
-    } catch (err) {
-      if (err instanceof NotLinkedError) return reply(spaceId, LINK_PROMPT);
-      throw err;
-    }
+  try {
+    // "own": a short yes/no to "Do you already own this?". "ask": any other text (greetings and "help" too),
+    // answered from this account's closet, savings, verdicts and recent messages.
+    const res = route.kind === "own" ? await answerOwnership(phone, route.owns) : await askQuestion(phone, text);
+    return reply(spaceId, res.message);
+  } catch (err) {
+    if (err instanceof NotLinkedError) return reply(spaceId, LINK_PROMPT);
+    throw err;
   }
-  return reply(spaceId, HELP);
 }
 
 async function handlePhoto({ msg, phone, spaceId, text, attachmentId }) {
