@@ -2,246 +2,234 @@
 
 Single source of truth for data shapes, endpoints and rules shared across parts.
 Read this before touching anything another part also touches.
+Reconciled against the code on main (Nov 14, after Parts 1 to 4 merged). Where this file and the code differ, the code wins and this file gets fixed.
 
-## 0. How to use this file
+## 0. Status tags and change rules
 
-**Status tags on every section**
-- `[BUILT]`: a part's build report says this exists and passed its own tests.
-- `[DECIDED]`: Hiresh and Avni agreed on it, no code yet.
-- `[PROPOSED]`: my default, not yet confirmed by Hiresh. Treat as changeable.
-- `[VERIFY]`: I wrote this from memory of reports. Check against the code.
+- `[BUILT]`: exists in the code on main and passed its part's tests.
+- `[STUB]`: exists but returns fake data.
+- `[DECIDED]`: agreed by Hiresh and Avni, no code yet.
+- `[PROPOSED]`: default, not yet confirmed. Changeable.
 
-**Reconcile rule (main agent, do this first)**
-This file was written from design decisions and build reports, not from reading the code.
-1. For every `[BUILT]` and `[VERIFY]` item, diff this file against the code (models.py, db.py, routers, config/*.json).
-2. Where they differ, the code wins. Fix this file, and add a line to section 12 (Reconciliation log).
-3. Tell Hiresh about every difference that changes a field name, type or endpoint.
-
-**Change rule**
-- Only the main agent edits this file.
-- Sub-agents never edit it. If a spec needs a different shape, the sub-agent finishes with the shape it needs listed under "Contract deviations" in its report.
-- No em dashes anywhere in code comments, UI strings, docs or commit messages.
+Change rules
+- Only the main agent edits this file. Sub-agents list "Contract deviations" in their report instead.
+- Response shapes already used by the extension may only grow (add optional fields). Never rename or remove.
+- No em dashes in code comments, UI strings, docs or commit messages.
 
 ## 1. Stack and hosting `[BUILT]`
 
 - Extension: Chrome MV3, plain JS. Content scripts render a Shadow DOM card. The service worker makes all backend calls.
-- Backend: FastAPI, runs on Hiresh's laptop (port 8000). `host_permissions` and CORS allow the extension origin and localhost.
-- DB: MongoDB Atlas (closet vector search needs Atlas). `MONGODB_URI` in `.env`. Never commit `.env`, keys or the URI.
-- Models:
-  - Gemini: item attributes, text structuring, embeddings (`gemini-embedding-2`, 768 dims).
-  - Claude: verdict (tool use, JSON out) and trend agent (`CLAUDE_MODEL`, currently `claude-haiku-5-5`).
-  - Trend agent search tool: Claude web search, type `web_search_20260318`, `allowed_callers: ["direct"]`, max_uses 5.
-- Retries: Gemini 503s are common. Retry up to 4 attempts with 2, 4, 8 s waits. Every Gemini or Claude call needs a fallback path (see section 8).
-- Demo account: `demo@secondlook.test`. Agents use their own `user_id` or DB name (section 11).
+- Backend: FastAPI on Hiresh's laptop, port 8000. `host_permissions` and CORS allow the extension and localhost. Run from main with `uvicorn backend.main:app --reload --port 8000`.
+- DB: MongoDB Atlas, database name `secondlook` (hardcoded in `backend/settings.py`, `DB_NAME`). Collections: `users`, `closet_items`, `trends`, `verdicts`, `ingest_jobs`. Closet vector search needs Atlas (`$vectorSearch`).
+- Secrets: `.env` only (`MONGODB_URI`, `JWT_SECRET`, API keys). Never commit them or print them.
+- Models: Gemini for attributes, text structuring and embeddings (`gemini-embedding-2`, 768 dims). Claude for the trend agent (Claude web search, tool type `web_search_20260318`) and, from Part 5, the verdict call.
+- Gemini 503s are frequent. Every Gemini call retries up to 4 attempts (2, 4, 8 s waits) and every caller has a fallback (section 8).
+- Demo login: `demo@secondlook.test`. Auth is JWT (`/auth/signup`, `/auth/login`, `/auth/me`).
 
-## 2. Capture events (Part 1) `[BUILT]` `[VERIFY]`
+## 2. Capture (Part 1) `[BUILT]`
 
-The extension emits two events to the backend.
+The extension builds an `Item` and sends it to `/analyze`.
 
-**Item read** (on add to cart, within about 1 second)
 ```json
-{
-  "name": "string",
-  "price": 19.99,
-  "currency": "USD",
-  "store": "uniqlo",
-  "url": "https://...",
-  "image_url": "https://...",
-  "price_source": "dom | jsonld | meta | gemini",
-  "captured_at": "ISO-8601"
+Item { "name": "string", "image_url": "string|null", "price": 19.99, "store": "string|null", "url": "string|null" }
+```
+- `price` is dollars, `>= 0`, or null.
+- The extension keeps price source (dom, jsonld, meta, Gemini via `/read-page`) in its own logs. It is not part of the API.
+- `POST /read-page` takes `{url, text (max 50000, first 8000 used), image_url?}` and returns `{name?, price?, image_url?}`. Used when the DOM price tier fails.
+
+Rules that must stay true
+- Price is the displayed non-member price for the selected variant. H&M ProductGroup pages resolve the variant by URL code, sku or color, never the first variant.
+- Zara, Uniqlo, H&M, Pacsun have no JSON-LD price in meta. Price comes from the DOM or `/read-page`.
+- Add-to-cart detection is multilingual (Hollister can render Spanish) and ignores recommendation tiles unless the tile is the current product.
+- Removal capture (`extension/src/content/removal.js`) fires only after any confirm dialog resolves. Items removed from the cart do not count toward money kept. There is no backend endpoint for removal.
+
+## 3. Attributes (Part 2) `[BUILT]`
+
+`POST /attributes`
+```json
+request  { "name": "string (min 1)", "image_url": "string|null", "description": "<=20000", "breadcrumb": "<=2000", "text": "<=50000 (first 4000 used)" }
+response ItemAttributesResponse {
+  "category", "color_family", "fabric", "cut", "style": "string|null (allowed values below)",
+  "fabric_confidence": "high | medium | low | null",
+  "description": "<= 25 words",
+  "is_apparel": "bool|null",
+  "status": "ok | attributes_failed",
+  "attribute_string": "string, empty when attributes_failed"
 }
 ```
-Rules that must stay true:
-- Price is the displayed non-member price for the selected variant. H&M ProductGroup pages are resolved by URL variant code, sku or color, never "first variant".
-- Zara, Uniqlo, H&M and Pacsun have no JSON-LD Product price in meta. Price comes from DOM or Gemini.
-- Add-to-cart detection is multilingual (Hollister can render Spanish) and ignores recommendation tiles unless the tile belongs to the current product.
-
-**Removal** (item leaves the cart)
-- Fire only after any confirm dialog resolves (Uniqlo "Remove" opens one).
-- Removed-from-cart does NOT count toward money kept. Only `Skip it` counts.
-
-Exact field names above are `[VERIFY]`.
-
-## 3. Attributes (Part 2) `[BUILT]` `[VERIFY]`
-
-`POST /attributes` takes `{name, image_url?, image_b64?, store?}` and returns:
-```json
-{
-  "category": "enum, includes 'other'",
-  "color_family": "enum",
-  "cut": "string or enum",
-  "fabric": "string or enum",
-  "fabric_confidence": "enum (see note)",
-  "style": "string",
-  "pattern": "optional string",
-  "description": "string",
-  "attribute_string": "see template"
-}
-```
-- Vocabulary source of truth: `config/attributes.json`, served by `GET /config/attributes`. Do not copy enum values into other files.
-- `fabric_confidence`: Part 0 used a number, Part 2 uses an enum. Readers must accept both. Writers use the enum.
-- `attribute_string` template (fields skipped when `unknown` or `other`):
-  `{color_family} {cut} {pattern?} {fabric} {category}, {style} style. {description}`
-  Pattern goes right after cut when present.
-- There is exactly one implementation of `attribute_string` (in `backend/services/item_understanding.py`). No other module may build its own.
-- Typical latency 1.0 to 1.4 s per call.
+- Allowed values: `backend/config/attributes.json` (`GET /config/attributes`). Do not copy enums elsewhere.
+  - category: tee, shirt, sweater, hoodie, jacket, coat, jeans, pants, shorts, skirt, dress, shoes, bag, accessory
+  - color_family: black, white, gray, beige, brown, red, orange, yellow, green, blue, purple, pink, multi
+  - fabric: cotton, denim, wool, polyester, nylon, linen, leather, blend, unknown
+  - cut: cropped, fitted, regular, relaxed, oversized, wide, straight, slim
+  - style: basic, streetwear, preppy, athleisure, y2k, minimalist, boho, formal, other
+- Not built: `pattern` field, and `other` in category. A non-apparel item gets `is_apparel: false`. `[PROPOSED]` to add `pattern` only if Part 5 needs it.
+- `Attributes` (stored model) accepts `fabric_confidence` as a 0 to 1 number or high/medium/low. Writers use the enum.
+- `attribute_string(attrs)` in `backend/services/item_understanding.py` is the only implementation. Template: `{color_family} {cut} {fabric} {category}, {style} style. {description}`. Null, `unknown` and `other` values are skipped with their words. `closet.embedding_text()` wraps it and falls back to the item name when there are no attributes.
+- Latency about 1.0 to 1.4 s per call.
 
 ## 4. Embeddings `[BUILT]`
 
-- `embed_text(attribute_string) -> list[float]` (768 dims, `gemini-embedding-2`). One call per text. Never batch several texts into one call (it merges them into one vector).
-- Anything that is embedded must be embedded from `attribute_string` produced by section 3. If the attribute code changes, run `scripts/reembed_closet.py`.
+- `embed_text(text)` and `embed_image(jpeg_bytes)` in `backend/services/embeddings.py`. 768 dims, normalized. `embed_many` runs one call per text (8 in parallel). Never put several texts into one call, which merges them into one vector.
+- Closet text embeddings must come from `attribute_string`. After changing that code, run `python scripts/reembed_closet.py` (supports `--dry-run`, writes nothing if any call fails).
 
-## 5. Closet (Part 3) `[BUILT]` `[VERIFY]`
+## 5. Closet (Part 3) `[BUILT]`
 
-**Closet item document**
+Stored document (`closet_items`)
 ```json
 {
-  "_id": "...",
-  "user_id": "string",
+  "user_id": "ObjectId",
+  "source": "snap | auto_add | ownership_answer | quick_add | ingest_photo | ingest_video | ingest_text",
+  "status": "owned | incoming",   // a document with no status counts as owned
   "name": "string",
-  "attributes": { "...section 3 fields..." },
-  "attribute_string": "string",
-  "embedding": [768 floats],
-  "thumbnail_b64": "600px JPEG, base64",
-  "status": "owned | incoming",
-  "source": "ingest_photo | ingest_video | ingest_text | auto_add",
-  "likely_duplicate_of": "id or null",
-  "created_at": "ISO-8601"
+  "image_data": "JPEG data URL (600px longest side) | null",
+  "attributes": { "category", "color_family", "fabric", "fabric_confidence", "cut", "style" } ,
+  "description": "string",
+  "embedding": "768 floats | null",
+  "image_embedding": "768 floats | null (optional, a failure does not block the save)",
+  "source_verdict_id": "set on auto_add only, unique sparse index (one auto-add per verdict)",
+  "created_at": "datetime"
 }
 ```
+API returns `ClosetItem` without `embedding` or `image_embedding`. `GET /closet` omits `image_data` unless `include_images` is set.
 
-**Endpoints**
+Endpoints
 | Method and path | Purpose |
 | --- | --- |
-| `POST /closet/ingest` | multipart, max 15 images and 1 video, plus optional text. Creates an `ingest_jobs` doc. |
-| `GET /closet/ingest/{job_id}` | job state and candidates |
-| `POST /closet/ingest/{job_id}/save` | save reviewed candidates. Second save of the same job returns 409. |
-| `GET /closet?status=owned\|incoming` | list items |
-| ownership endpoints | answer the ownership question when closet has fewer than 10 items |
-| `POST /action` | buy anyway / skip it, see section 9 |
-| `GET/PUT /settings` | `auto_add_purchases` (default `true`) |
-| `GET /closet-ui` | review page (grid with editable dropdowns, "Save all") |
+| `POST /closet/ingest` | multipart, up to 15 images and 1 video, plus optional text. Returns `{job_id}`. |
+| `GET /closet/ingest/{job_id}` | `status queued|running|done|failed|saved`, `progress`, candidate `items`, `warnings`, `error` |
+| `POST /closet/ingest/{job_id}/save` | `{items: SaveItem[]}` (max 100). Returns `{saved, ids}`. A second save returns 409. |
+| `POST /closet/parse-text` | `{text}` returns candidates, no save |
+| `POST /closet` | quick add: `{name?, image_base64?, attributes?, source}` |
+| `GET /closet?status=owned|incoming` | list |
+| `POST /closet/ownership-options` | `{name, attributes}` returns `{show, options, staple_idea}`. `show` is true only while the closet has fewer than 10 items. |
+| `POST /closet/ownership-answer` | `{attributes, name?}` adds an owned item |
+| `GET /settings`, `PATCH /settings` | `{auto_add_purchases: bool}` default `true` |
+| `GET /closet-ui` | review page (grid, editable dropdowns, Save all) |
 
-**Ingest pipeline**: ffmpeg frames at about 1 fps (cap about 40), Gemini batches of about 10 images at about 1024 px with `box_2d` ([ymin, xmin, ymax, xmax], scaled 0 to 1000), text parsing, Gemini merge-duplicates call, embedding comparison to existing closet (sets `likely_duplicate_of`), Pillow crop to 600 px thumbnails.
+Candidate (`CandidateItem`): `id, origin photo|video|text, name, attributes, description, confidence 0..1, low_confidence, image_index, frame, box_2d [ymin,xmin,ymax,xmax] 0..1000, brand_visible, seen_count, thumbnail, likely_duplicate_of {id, name, score}`. `likely_duplicate_of` exists on candidates only, it is not stored.
 
-**Buy anyway**: silent auto-add to closet with `status: incoming`, `source: auto_add`, no prompt, no notification. Controlled by `settings.auto_add_purchases`.
+Ingest pipeline: ffmpeg frames at about 1 fps (cap about 40), Gemini batches of about 10 images at 1024 px, text parsing, Gemini merge-duplicates call, embedding comparison to the existing closet, Pillow crops.
 
-**Matching: `find_matches(user_id, attributes_or_embedding, k)`**
-Returns, best first:
-```json
-[{ "score": 0.8585, "item_id": "...", "name": "Black tee", "status": "owned",
-   "color_family": "black", "category": "tee", "look_match": true }]
-```
-- `score` is plain cosine. Atlas reports `(1 + cos) / 2`, convert before returning.
-- Atlas index `closet_vector`, filters on `user_id` and `attributes.category`. Free tier allows 3 search indexes total.
-- Color is decided in code from `color_family`, because text embeddings barely separate colors (blue vs black jeans scored 0.7996).
-- `config/thresholds.json` today: `{"look_similarity": 0.80, "require_color_match": true, "duplicate_similarity": 0.93}`. `duplicate_similarity` is untuned (a re-photographed tee scored 0.8585). Leave it until `tune_matching.py` has real pairs.
+Buy anyway: `POST /action` with `bought` triggers a background auto-add (`status incoming`, `source auto_add`) after the response, unless `settings.auto_add_purchases` is false. The `/action` response does not change.
 
-## 6. Trends (Part 4) `[BUILT]` `[VERIFY]`
+Matching (`backend/services/closet.py`)
+- `find_matches(user_id, attrs, k=5)` returns `[{score, id, name, attributes, status}]`, best first. `score` is plain cosine. Atlas reports `(1 + cos) / 2`, converted by `atlas_to_cosine`. Text embedding only, filtered to the same user and category. It never returns image_data or embeddings.
+- `is_look_match(match, attrs)` applies `config/thresholds.json` and the color check. Color is decided from `color_family` in code, because text embeddings barely separate colors (blue vs black jeans scored 0.7996).
+- `config/thresholds.json`: `{"look_similarity": 0.80, "require_color_match": true, "duplicate_similarity": 0.93}`. `duplicate_similarity` is untuned (a re-photographed tee scored 0.8585).
+- Atlas index `closet_vector`, filters `user_id` and `attributes.category`. Create with `python scripts/create_indexes.py`. Free tier allows 3 search indexes.
 
-**Trend document**
+## 6. Trends (Part 4) `[BUILT]`
+
+`GET /trends` returns `{trends: TrendSummary[]}` (example images reduced to `example_image_count`). Prompt helper: `backend/trends.py: get_trends_for_prompt()`.
+
+Stored document (`TrendDoc`, validated for both seed file and agent output)
 ```json
 {
   "name": "string",
-  "category": "must map to a category in attributes.json",
-  "features": { "cut": "...", "color_family": "...", "fabric": "..." },
-  "why": "string",
-  "sources": [{ "title": "...", "url": "...", "published": "date or null" }],
-  "lifespan_bucket": "short | medium | long | null",
-  "lifespan_weeks_est": "number or null",
-  "lifespan_source_url": "required when lifespan_weeks_est is set",
-  "alternatives": [{ "name": "...", "why": "...", "source_url": "..." }],
+  "category": "string|null (listed values match best)",
+  "features": { "cut": "...", "color": "...", "fabric": "..." },   // note: key is "color", not "color_family"
+  "first_seen": "datetime|null",
+  "lifespan_weeks_est": "number|null",
+  "lifespan_bucket": "short|medium|long|null",   // short <= 16 weeks, medium <= 52, long above
+  "lifespan_label": "string (required)",
+  "lifespan_source_url": "must be one of sources[].url when any lifespan field is set, else null",
+  "sources": [{ "title": "string", "url": "http(s) url" }],      // at least 1
+  "example_images": ["url or data url"],
+  "alternatives": [{ "type": "...", "why_it_lasts": "...", "where_to_look": "store kind, not a link", "url": "only if in sources" }],
   "origin": "seed | agent",
-  "created_at": "ISO-8601"
+  "search_suggestions_html": "agent only. Leftover from the dropped Gemini grounding path, unused"
 }
 ```
-- `GET /trends` lists them. `get_trends_for_prompt()` returns the compact form used in the verdict prompt.
-- Rules (hardening, status `[DECIDED]`): no trend without a category, a trend is a specific garment or accessory style (not a color or an aesthetic), sources older than 12 months are dropped, lifespan fields are null when sources disagree, dedupe on category plus features, not name alone.
-- Lifespan numbers are shown to users only with a cited source.
-- No human review of agent trends. Guards live in code.
-- No document whose name starts with `TEST` may exist in a shared DB.
+- Seed file: `seed/trends_seed.json` (loaded by `scripts/seed_trends.py`). Agent: `scripts/run_trend_agent.py` (Claude web search, then structuring). A real run waits for the seeds.
+- Guards in code: no category means discard, sources older than 12 months dropped, lifespan nulled when sources disagree, dedupe on category plus feature signature (not name alone), existing names passed into the structuring call.
+- Lifespan numbers are shown to users only with the cited source.
+- No human review of agent trends. Guards are the safety net.
+- Trend alternatives are text suggestions. The verdict `Alternative` shape below is different (section 7), so Part 5 maps one to the other.
 
-## 7. Verdicts (Part 5) `[DECIDED]` `[PROPOSED]`
+## 7. Verdicts (Part 5)
 
-Agreed by Hiresh: V1, V5, V8, and hybrid authority (V10). Everything else here is my default.
+### Current code `[STUB]`
+`POST /analyze` takes `{item: Item}` and cycles through the three verdicts by the user's verdict count. It never calls Parts 2, 3 or 4. Matched closet item is the user's oldest item, matched trend is the first trend by `_id`. `attributes` is stored as null.
 
-**Verdict values**: `have_this_look`, `micro_trend`, `good_buy`. One verdict per item.
-**Priority**: `have_this_look` > `micro_trend` > `good_buy`.
-
-**Authority is hybrid**
-- Code computes signals: closet matches (section 5), trend match, price context.
-- One Claude call, JSON via tool use, judges only the gray band.
-
-**Zones for `have_this_look`** (per category `t_c`, starts at `look_similarity` 0.80)
-| Score vs `t_c` | Who decides |
-| --- | --- |
-| at or above `t_c + margin` | code forces `have_this_look` |
-| below `t_c - margin` | code forbids `have_this_look` |
-| in between | Claude decides |
-
-Thumbs-down raises `t_c`, thumbs-up lowers it. Step size is set in Part 7. Margin value: `[PROPOSED]` 0.04.
-
-**Images**: Claude receives text only, except in the gray band. There it also gets the item photo plus the top 1 or 2 matched closet photos.
-
-**Small closet** (fewer than 10 items): when nothing matches, say "I don't see this in your closet". Never claim the user does not own it.
-
-**micro_trend** requires a matched trend with `lifespan_bucket == "short"`.
-**Alternatives** come from the matched trend's source-based alternatives only.
-
-**Verdict output**
+Response (`AnalyzeResponse`, `[BUILT]`, the extension depends on it):
 ```json
-{
-  "verdict": "have_this_look | micro_trend | good_buy",
-  "reason": "one or two sentences, shown on the card",
-  "matched_closet_item_id": "id or null",
-  "matched_trend": { "name": "...", "lifespan_bucket": "...", "source_url": "..." },
-  "alternatives": [{ "name": "...", "why": "...", "source_url": "..." }],
-  "decided_by": "code | claude | fallback",
-  "override": { "code_said": "...", "claude_said": "..." }
-}
+{ "status": "ok", "verdict_id": "string",
+  "verdict": "have_this_look | micro_trend | good_buy", "reason": "string",
+  "matched_closet_item": "ClosetItem|null", "matched_trend": "Trend|null",
+  "alternatives": [{ "name": "string", "url": "string|null", "price": 48.0, "reason": "string|null" }],
+  "outfits": [{ "name": "string", "closet_item_ids": [] }],
+  "expected_wears": "int|null", "cost_per_wear": "float|null" }
 ```
-- `override` is logged in the stored verdict doc whenever Claude disagrees with code inside the allowed zone.
-- Failure fallback: retry the Claude call once, then fall back to a code-only verdict with a template reason and `decided_by: "fallback"`.
-- `POST /analyze` takes the section 2 item read and returns the verdict plus the item's attributes. It must always return something within the card's time budget (target under 3 s typical, hard cap decided in Part 5).
+Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_item_id, matched_trend_id, alternatives, expected_wears, action none|skipped|bought, feedback none|up|down, created_at`.
+
+### Part 5 rules `[DECIDED]` (V1, V5, V8 and hybrid authority agreed) and `[PROPOSED]` (the rest)
+- Priority: `have_this_look` > `micro_trend` > `good_buy`. One verdict per item.
+- Hybrid authority: code computes signals (closet matches, trend match, price). One Claude call, JSON via tool use, judges only the gray band.
+- Zones for `have_this_look`, per category threshold `t_c` (starts at `look_similarity`):
+  - score at or above `t_c + margin`: code forces `have_this_look`
+  - below `t_c - margin`: code forbids it
+  - in between: Claude decides
+  - `margin` `[PROPOSED]` 0.04. Thumbs-down raises `t_c`, thumbs-up lowers it. Part 7 sets the step. Bounds `[PROPOSED]` 0.70 to 0.92.
+- Claude sees text only, except in the gray band, where it also gets the item photo and the top 1 or 2 matched closet photos.
+- Closet under 10 items and no match: say "I don't see this in your closet". Never claim the user lacks it.
+- `micro_trend` needs a matched trend with `lifespan_bucket == "short"`. Alternatives come from the matched trend's source-based alternatives, mapped into the `Alternative` shape.
+- New optional response and stored fields (additive only): `decided_by: code | claude | fallback`, `override: {code_said, claude_said}` logged whenever Claude overrides code inside its zone.
+- Failure: retry the Claude call once, then a code-only verdict with a template reason and `decided_by: "fallback"`.
+- `/analyze` must always return within the card's time budget (target under 3 s typical, hard cap set in Part 5).
+- Attributes for the item come from Part 2 (`/attributes` logic called in-process), and are stored on the verdict doc.
 
 ## 8. Failure behavior (all parts) `[DECIDED]`
 
-- The card must never block the store. If the backend is down or slow, show "Second look unavailable" and let the click through.
-- Gemini failure: retry with backoff, then degrade (no attributes means code-only verdict `good_buy`).
+- The card never blocks the store. If the backend is down or slow, show "Second look unavailable" and let the click through.
+- Gemini failure: retry with backoff, then degrade (no attributes means a code-only verdict).
 - Claude failure: section 7 fallback.
-- Atlas failure on `find_matches`: no match, and the card says nothing about closet ownership.
+- Atlas failure in `find_matches`: no match, and the card says nothing about closet ownership.
 
-## 9. Actions and money (Parts 6 and 8) `[DECIDED]` `[PROPOSED]`
+## 9. Actions, money, dashboard `[BUILT]` (placeholders noted)
 
-- Card actions: `Skip it`, `Buy anyway`, thumbs up/down (Part 7).
-- `Skip it` counts toward money kept (price of the item at skip time).
-- Items removed from the cart do not count toward money kept.
-- `Buy anyway` logs a purchase and triggers the auto-add rule in section 5.
-- Stored per action: `{user_id, item read, verdict, action, ts}`. Collection name as in `db.py`.
+- `POST /action` takes `{verdict_id, action: skipped|bought}` and returns `{ok, balances}`. Balances are a placeholder (`placeholder: true`, Nessie not wired).
+- `GET /dashboard` returns `{money_kept, waste_avoided, verdicts (last 50), cost_per_wear}`. `money_kept` is the sum of `item.price` over verdicts with `action == skipped`. `waste_avoided` and `cost_per_wear` are null for now.
+- `GET /cart-summary` is a placeholder (all zero, `placeholder: true`). `GET /dashboard-ui` serves the page.
+- Only Skip it counts toward money kept.
 
 ## 10. Feedback (Part 7) `[PROPOSED]`
 
-- Thumbs on a verdict adjusts `t_c` for the item's category (section 7). Per-user, per-category value stored on the user doc.
-- Step size and bounds are set in Part 7. Bounds `[PROPOSED]`: `t_c` between 0.70 and 0.92.
+- `POST /feedback` takes `{verdict_id, value: up|down}` and stores it on the verdict `[BUILT]`. It does not yet change any threshold.
+- Part 7 adds: per-user, per-category `t_c`, step size and bounds (section 7).
 
-## 11. Testing and isolation rules
+## 11. Testing and isolation
 
-- Each agent or sub-agent uses its own `user_id` (for example `test_part5`), or its own DB name (`secondlook_test_<part>`). Never write test data to the demo user.
-- Test fixtures for the extension live in `extension/tests/fixtures`. Real-store retests are done by Hiresh or the browser agent, never faked.
-- Before any merge to main: all suites pass (backend, trends, extension), then a smoke test of the chain: `/attributes` then embed, then `find_matches`, then trends lookup, then `/analyze`.
+- `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
+- Last known results on the integration merge: extension E2E 54/54, trends unittest 22/22, price parser 23 checks, backend endpoints `/health`, `/attributes`, `/trends`, `/closet` return 200.
+- Before any merge to main: all suites pass, then a smoke test of the chain `/attributes`, then embed, then `find_matches`, then trends lookup, then `/analyze`.
 - Tag before big merges: `git tag pre-integration main`.
+- `python scripts/check_keys.py` verifies MongoDB, Claude, Claude web search (about $0.01), Gemini and Nessie.
 
-## 12. Reconciliation log (main agent fills this in)
+## 12. Reconciliation log (Nov 14)
 
-| Date | Section | Contract said | Code says | Fixed which |
-| --- | --- | --- | --- | --- |
-| | | | | |
+| Section | CONTRACT said | Code says | Fixed which |
+| --- | --- | --- | --- |
+| 2 | Item read has `currency`, `price_source`, `captured_at` | `Item` is name, image_url, price, store, url only | Contract |
+| 2 | Removal event sent to backend | No endpoint. `removal.js` runs in the extension | Contract |
+| 3 | `POST /attributes` takes `image_b64`, `store` | Takes `name, image_url, description, breadcrumb, text` | Contract |
+| 3 | Attributes include `pattern` and category `other` | Neither exists. Response adds `is_apparel` and `status` | Contract (pattern is optional later) |
+| 3 | `fabric_confidence` enum only | Stored model accepts number or enum, `/attributes` returns the enum | Contract |
+| 5 | Closet field `thumbnail_b64`, `likely_duplicate_of` stored | Field is `image_data` (data URL). `likely_duplicate_of` is on candidates only. Also stores `image_embedding`, `description`, `source_verdict_id` | Contract |
+| 5 | `GET/PUT /settings` | `GET` and `PATCH` | Contract |
+| 5 | `find_matches` returns `look_match` | Returns `{score,id,name,attributes,status}`. `is_look_match()` is separate | Contract |
+| 5 | Source enum 4 values | 7 values (snap, auto_add, ownership_answer, quick_add, ingest_*) | Contract |
+| 6 | `features.color_family`, `sources[].published`, alternatives `{name,why,source_url}` | `features.color`, no `published`, alternatives `{type, why_it_lasts, where_to_look, url}`, `lifespan_label` required | Contract |
+| 6 | No leftovers | `search_suggestions_html` field still in the model, unused | Left in code, noted |
+| 7 | Verdict output shape with `matched_trend {name,...}` | Existing `AnalyzeResponse` (full objects, `outfits`, `cost_per_wear`). New fields must be additive | Contract |
+| 7 | `/analyze` real | `/analyze` is still a stub | Noted as `[STUB]` |
+| 9 | `/action` `buy anyway` naming | Values are `skipped` and `bought`. Response has placeholder `balances` | Contract |
+| 11 | Per-agent DB name | `DB_NAME` hardcoded. Use test users | Contract |
 
 ## 13. Open items
 
-- Part 5 defaults V2 to V4, V6, V7 and V9 to V15 not confirmed.
-- Whether the contract patch (`pattern`, `category: "other"`) landed.
-- Whether `lifespan_bucket` landed on trends in the code.
-- 10 seed trends from Hiresh (`seed/trends_seed.json` is empty until then).
+- Part 5 not built. Defaults V2 to V4, V6, V7, V9 to V15 not confirmed.
+- 10 seed trends from Hiresh. `seed/trends_seed.json` holds only one `EXAMPLE barrel-leg jeans` entry. The 3 placeholder trends that `GET /trends` returns come from Part 0 data already in the database.
 - Demo closet seeding (closet walkthrough video).
-- `duplicate_similarity` tuning.
+- `duplicate_similarity` tuning with real re-photographed pairs.
+- Remove the 3 Part 0 placeholder trends and any `EXAMPLE` or `TEST` trends when the real seeds load, since they can trigger stub micro_trend verdicts.
