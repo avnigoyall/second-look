@@ -206,6 +206,12 @@
     .status.saved { display: flex; gap: 6px; align-items: center; color: var(--ink); font-variant-numeric: tabular-nums; }
     .saved-icon { display: inline-grid; flex: none; color: var(--accent); }
     .saved-icon svg { width: 14px; height: 14px; }
+    /* savings goal: one quiet line under the skip message, aligned with its text (14px icon + 6px gap) */
+    .goal-line { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--muted);
+                 font-variant-numeric: tabular-nums; text-wrap: pretty; overflow-wrap: anywhere; }
+    .goal-line[hidden] { display: none; }
+    .status.saved + .goal-line { padding-left: 20px; }
+    .goal-line.reached { color: var(--accent); font-weight: 500; }
 
     /* ---------- forms (paste and price) ---------- */
     form { display: grid; gap: 10px; margin-top: 12px; }
