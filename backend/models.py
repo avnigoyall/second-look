@@ -165,6 +165,23 @@ class ReadPageRequest(BaseModel):
     image_url: str | None = None
 
 
+class ReadPriceRequest(BaseModel):
+    url: str = Field(max_length=4000)
+    name: str | None = Field(None, max_length=300)
+    windows: list[Annotated[str, Field(max_length=2000)]] = Field(
+        min_length=1, max_length=24, description="Visible page text around each currency amount and the add-to-cart "
+                                                 "area. At most 24 windows, 2000 characters each, 8000 in total")
+
+    @field_validator("windows")
+    @classmethod
+    def total_size(cls, windows: list[str]) -> list[str]:
+        if sum(len(w) for w in windows) > 8000:
+            raise ValueError("windows have more than 8000 characters in total")
+        if not any(w.strip() for w in windows):
+            raise ValueError("windows are empty")
+        return windows
+
+
 class AttributesRequest(BaseModel):
     name: str = Field(min_length=1)
     image_url: str | None = None
@@ -225,6 +242,11 @@ class ReadPageResponse(BaseModel):
     name: str | None = None
     price: float | None = None
     image_url: str | None = None
+
+
+class ReadPriceResponse(BaseModel):
+    price: float | None = None
+    price_text: str | None = Field(None, description="The price exactly as shown on the page, for example \"$39.90\"")
 
 
 class ItemAttributesResponse(BaseModel):

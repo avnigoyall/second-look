@@ -167,6 +167,25 @@ const RECORDER = `(() => {
     (meta.includes("$79.00") && entry?.price === 79 ? pass : fail)("2d. entered price is used", `${meta} | session price ${entry?.price}`);
   }
 
+  // ---- 2e. price only in body text past the first 8000 characters: the Claude price tier finds it ----
+  {
+    const page = await openStore("product-textprice.html");
+    const rep = await diagnoseOn(page);
+    const c = rep.tiers.claude || {};
+    (rep.price_source === "claude" && rep.item?.price === 129 && c.result?.price_text === "$129.00" ? pass : fail)(
+      "2e. Claude price tier: sale price $129.00 read from body text", `price_source=${rep.price_source} price=${rep.item?.price} claude=${JSON.stringify(c)}`);
+    (rep.tiers.dom?.found === false && rep.tiers.gemini?.result?.price == null ? pass : fail)(
+      "2e. DOM and /read-page tiers found no price first", `dom=${JSON.stringify(rep.tiers.dom)} gemini=${JSON.stringify(rep.tiers.gemini)}`);
+    (c.ms != null && c.ms < 5500 ? pass : fail)("2e. Claude price tier answered within its wait", `${c.ms} ms, ${c.windows} windows, ${c.chars} chars`);
+    await page.click("#add");
+    await card(page).locator(".badge").waitFor({ timeout: 20000 });
+    const meta = await card(page).locator(".item-meta").textContent();
+    const logs = page.slLogs.join(" | ");
+    (meta.includes("$129.00") && /price source: claude 129/.test(logs) ? pass : fail)(
+      "2e. card shows the Claude price and the console logs price source claude", `${meta} | ${logs.match(/price source: \w+[^|]*/)?.[0]}`);
+    await sleep(400); await page.screenshot({ path: `${OUT}/2e-claude-price.png` });
+  }
+
   // ---- 2c + 3. not a product: paste-a-link, then paste reads through a background tab ----
   {
     const page = await openStore("not-a-product.html");

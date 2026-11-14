@@ -16,6 +16,7 @@ from backend.auth import check_password, create_token, current_user, hash_passwo
 from backend.db import client, closet_items, ensure_indexes, users, verdicts
 from backend.images import decode_base64_image, to_data_url
 from backend.page_reader import ReadPageError, read_page
+from backend.price_reader import read_price
 from backend.routers import attributes as attributes_router
 from backend.routers import closet as closet_router
 from backend.routers import imessage as imessage_router
@@ -184,6 +185,14 @@ def read_page_endpoint(body: m.ReadPageRequest, user=Depends(current_user)):
     except ReadPageError as e:
         raise HTTPException(502, str(e))
     return item.model_dump()
+
+
+@app.post("/read-price", response_model=m.ReadPriceResponse)
+def read_price_endpoint(body: m.ReadPriceRequest, user=Depends(current_user)):
+    """Last price tier: Claude picks the displayed price from text windows. Answers within about 4 s.
+    Any failure, or a price that is not verbatim in the windows, gives {price: null, price_text: null}."""
+    price, price_text = read_price(body.url, body.name, body.windows)
+    return {"price": price, "price_text": price_text}
 
 
 # ---------- closet ----------

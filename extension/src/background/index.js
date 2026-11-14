@@ -7,6 +7,8 @@ const API_TIMEOUT_MS = 15000;
 // The verdict engine can take about 10 s worst case (Claude retry included). Past this the card
 // shows "Second look unavailable" instead of waiting.
 const ANALYZE_TIMEOUT_MS = 12000;
+// /read-price gives Claude 4 s; the rest is network margin. The reader then asks the shopper for the price.
+const READ_PRICE_TIMEOUT_MS = 4800;
 const TAB_LOAD_TIMEOUT_MS = 20000;
 const LOG = "[SecondLook]";
 
@@ -17,6 +19,7 @@ const READER_FILES = [
   "src/content/reader/meta.js",
   "src/content/reader/domPrice.js",
   "src/content/reader/details.js",
+  "src/content/reader/priceWindows.js",
   "src/content/reader/readItem.js",
   "src/content/matchers.js",
 ];
@@ -197,6 +200,8 @@ const handlers = {
   DIAGNOSE: diagnose,
   ANALYZE_ITEM: analyzeItem,
   READ_PAGE: ({ url, text, image_url }) => api("/read-page", { method: "POST", body: { url, text, image_url } }),
+  READ_PRICE: ({ url, name, windows }) =>
+    api("/read-price", { method: "POST", body: { url, name, windows }, timeoutMs: READ_PRICE_TIMEOUT_MS }),
   READ_URL: readUrl,
   SEND_ACTION: sendAction,
   SEND_FEEDBACK: ({ verdictId, value }) =>

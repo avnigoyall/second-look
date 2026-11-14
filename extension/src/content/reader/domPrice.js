@@ -140,5 +140,5 @@
     }
   }
 
-  global.SecondLookDomPrice = { readDomPrice, readDisplayedPrice };
+  global.SecondLookDomPrice = { readDomPrice, readDisplayedPrice, mainAddButton };
 })(globalThis);

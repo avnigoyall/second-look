@@ -96,15 +96,16 @@ Record real store results in `docs/store-test-results.md`.
 
 ## How item capture works
 
-**Reading the item (four tiers, in order).** `extension/src/content/reader/`:
+**Reading the item (tiers, in order).** `extension/src/content/reader/`:
 
 1. `jsonld.js` reads schema.org `Product` or `ProductGroup` data from JSON-LD scripts, including `@graph` containers, offer arrays, and `AggregateOffer`.
 2. `meta.js` reads Open Graph and product meta tags (`og:title`, `og:image`, `product:price:amount`) and microdata (`itemprop`). It strips a trailing store name from titles ("Linen Shirt | Zara" becomes "Linen Shirt").
 3. If tier 1 or 2 found a name but no price, `domPrice.js` reads the price off the page before any Gemini call: `itemprop="price"`, then `[data-price]`, then short currency text inside the main product container (the element that holds both the `<h1>` and the add-to-cart button). It skips struck-through or "was / original / old" prices, so a sale shows its current price. A range takes the lower value.
 4. If the name or image is still missing, or the price is still missing, `readItem.js` sends the trimmed visible page text (up to 8000 characters) and an image URL to `POST /read-page`, which asks Gemini for `{name, price, image_url}`.
-5. If no name is found, the card shows paste-a-link.
+5. If the price is still missing, `priceWindows.js` cuts windows from the whole page text: the text of the add-to-cart button's container (up to 1500 characters), then 120 characters on each side of every currency amount (`$12.34`, `12.34 USD`, `€`, `£`). Overlapping windows merge, duplicates drop, and the total stays under 20 windows and 6000 characters. `POST /read-price` sends them with the product name to Claude, which returns the displayed non-member price exactly as written (`price_text`). The backend accepts it only when that text appears verbatim in the windows and parses to a number. Claude gets 4 s and no retry; the extension waits at most 5 s, then the card asks for the price.
+6. If no name is found, the card shows paste-a-link.
 
-Every read logs `[SecondLook] price source: jsonld | meta | dom | gemini | none` in the page console, and Diagnose reports `price_source` plus what the DOM tier found (`tiers.dom.via`).
+Every read logs `[SecondLook] price source: jsonld | meta | dom | gemini | claude | none` in the page console, and Diagnose reports `price_source` plus what each tier found (`tiers.dom.via`, `tiers.claude` with the window count, characters sent, time and result).
 
 `price.js` parses prices with currency symbols or codes, thousands separators, decimal commas (`€39,90`), and ranges or "was / now" text (the lowest number wins). If no price is found, the card asks for it before checking.
 
