@@ -187,7 +187,7 @@ Response (`AnalyzeResponse`, `[BUILT]`, the extension depends on it):
   "zone": "forced | gray | none | null (null: matching did not run, say nothing about ownership)",
   "wears_estimated": "bool" }
 ```
-Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_item_id, matched_trend_id, alternatives, expected_wears, action none|skipped|bought, feedback none|up|down, created_at`, plus optional `target_crop` (Fix A, not returned by `/dashboard`). Part 5 also stores `signals` (matches, best, t_c, margin, zone, allowed, trends, closet_size, errors, path, claude_reply, timings), `decided_by`, `override`, `overrides`, `model`, `latency_ms`, `cost_per_wear`, `matched_closet_item_ids`. `attributes` is null when Part 2 failed.
+Stored verdict doc (iMessage verdicts add `channel` and `ownership`, see section 14): `user_id, item, attributes, verdict, reason, matched_closet_item_id, matched_trend_id, alternatives, expected_wears, action none|skipped|bought, feedback none|up|down, created_at`, plus optional `target_crop` (Fix A, not returned by `/dashboard`). Part 5 also stores `signals` (matches, best, t_c, margin, zone, allowed, trends, closet_size, errors, path, claude_reply, timings), `decided_by`, `override`, `overrides`, `model`, `latency_ms`, `cost_per_wear`, `matched_closet_item_ids`. `attributes` is null when Part 2 failed.
 Old verdict docs with a null alternative url get a store search link when `/dashboard` reads them.
 
 ### Card `[BUILT]` (Part 5)
@@ -259,6 +259,7 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 7 | `/analyze` under 3 s typical | Measured 3 to 4 s typical | Noted, open item |
 | 5 | `thresholds.json` has 3 keys | Adds `gray_margin: 0.04`. New `config/wears.json` (unverified) | Contract |
 | 11 | E2E 2a and 9 assume the stub returns micro_trend | Checks run on real micro_trend cards, else SKIP; non-micro_trend cards must show no alternatives | Contract |
+| 14 | No iMessage channel | Avni's Photon additions (`/imessage/*`, `users.phone`, verdict `channel` and `ownership`, data URL images) described from her branch; not on main yet | Contract (pending merge) |
 
 ## 13. Open items
 
@@ -267,3 +268,20 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 - Demo closet seeding (closet walkthrough video).
 - `duplicate_similarity` tuning with real re-photographed pairs.
 - Remove the 3 Part 0 placeholder trends and any `EXAMPLE` or `TEST` trends when the real seeds load, since they can trigger stub micro_trend verdicts.
+
+## 14. iMessage channel via Photon (Avni) `[BUILT on Avni's branch, not on main yet]`
+
+Photon connects the system to iMessage: a shopper texts a product photo, Photon passes it to the backend, and the verdict comes back as a message. Section text from Avni, as given:
+
+Backend additions (for CONTRACT.md)
+
+- `backend/routers/imessage.py`: `POST /imessage/link`, `/imessage/analyze`, `/imessage/own`. Header `X-Agent-Secret`.
+- `users.phone`: optional, unique sparse index.
+- Verdict docs from iMessage get `channel: "imessage"` and `ownership: "yes" | "no"` after the answer.
+  `item.image_url` is set to null after saving (the photo is kept as `target_crop`).
+- `fetch_image()` also accepts `data:image/...` URLs.
+- `python-multipart` added to `backend/requirements.txt` (the closet router needs it; it was missing).
+
+Main agent notes (checked against main on Nov 14):
+- None of the above is on main yet. Mark this section `[BUILT]` when Avni's branch merges.
+- `python-multipart` is missing from `requirements.txt` on main too, so a fresh clone cannot serve the closet upload routes until it lands.
