@@ -4,6 +4,9 @@ importScripts("/src/shared/state.js", "/src/shared/sessionStore.js");
 
 const API_BASE = "http://localhost:8000";
 const API_TIMEOUT_MS = 15000;
+// The verdict engine can take about 10 s worst case (Claude retry included). Past this the card
+// shows "Second look unavailable" instead of waiting.
+const ANALYZE_TIMEOUT_MS = 12000;
 const TAB_LOAD_TIMEOUT_MS = 20000;
 const LOG = "[SecondLook]";
 
@@ -36,21 +39,21 @@ class AppError extends Error {
   }
 }
 
-async function api(path, { method = "GET", body, auth = true } = {}) {
+async function api(path, { method = "GET", body, auth = true, timeoutMs = API_TIMEOUT_MS } = {}) {
   const { token } = await SecondLookState.getState();
   if (auth && !token) throw new AppError("Log in from the Second Look popup first.", "auth");
   const headers = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   try {
     res = await fetch(API_BASE + path, {
       method, headers, body: body ? JSON.stringify(body) : undefined, signal: controller.signal,
     });
   } catch (err) {
-    if (err.name === "AbortError") throw new AppError("Second Look took longer than 15 seconds to answer.", "timeout");
+    if (err.name === "AbortError") throw new AppError(`Second Look took longer than ${Math.round(timeoutMs / 1000)} seconds to answer.`, "timeout");
     throw new AppError("Cannot reach the Second Look server. Is it running on localhost:8000?", "offline");
   } finally {
     clearTimeout(timer);
@@ -108,7 +111,7 @@ async function login({ email, password }) {
 }
 
 async function analyzeItem({ item }) {
-  const result = await api("/analyze", { method: "POST", body: { item } });
+  const result = await api("/analyze", { method: "POST", body: { item }, timeoutMs: ANALYZE_TIMEOUT_MS });
   await SecondLookSession.add({ ...item, verdict_id: result.verdict_id, verdict: result.verdict });
   return result;
 }
@@ -186,6 +189,12 @@ const handlers = {
   SEND_ACTION: sendAction,
   SEND_FEEDBACK: ({ verdictId, value }) =>
     api("/feedback", { method: "POST", body: { verdict_id: verdictId, value } }),
+  // Small-closet ownership question (Part 3). Only used when /analyze sends no attributes.
+  GET_ATTRIBUTES: ({ name, image_url }) => api("/attributes", { method: "POST", body: { name, image_url } }),
+  OWNERSHIP_OPTIONS: ({ name, attributes }) =>
+    api("/closet/ownership-options", { method: "POST", body: { name, attributes } }),
+  OWNERSHIP_ANSWER: ({ attributes, name }) =>
+    api("/closet/ownership-answer", { method: "POST", body: { attributes, name } }),
 };
 
 // Every response has the shape { ok: true, data } or { ok: false, error, code }.

@@ -36,6 +36,7 @@
     .card {
       position: fixed; top: 16px; right: 16px; width: 360px; max-width: calc(100vw - 32px);
       box-sizing: border-box; padding: 16px; border-radius: 16px;
+      max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain;
       background: var(--bg); box-shadow: var(--shadow);
       border: 1px solid transparent; /* keeps an edge in forced-colors mode */
       pointer-events: auto;
@@ -114,7 +115,34 @@
     .badge.have_this_look { --c: var(--have); }
     .badge.micro_trend { --c: var(--trend); }
     .badge.good_buy { --c: var(--good); }
-    .reason { margin-bottom: 12px; }
+    .reason { margin-bottom: 12px; text-wrap: pretty; }
+    .section-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+    .ext { display: inline-grid; flex: none; color: var(--muted); }
+    .ext svg { width: 12px; height: 12px; }
+
+    /* have_this_look: closet photos. Tiles are 6px radius inside the 10px panel with 4px padding. */
+    .closet { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .closet-strip { list-style: none; margin: 0; padding: 4px; display: flex; gap: 4px; flex: none;
+                    border-radius: 10px; background: var(--soft); }
+    .closet-tile { width: 48px; height: 48px; border-radius: 6px; overflow: hidden; background: var(--bg); }
+    .closet-tile img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 6px;
+                       outline: 1px solid var(--img-outline); outline-offset: -1px; }
+    .closet-ph { width: 100%; height: 100%; display: grid; place-items: center; color: var(--muted); }
+    .closet-ph svg { width: 20px; height: 20px; }
+    .closet-text { min-width: 0; }
+    .closet-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .closet-more { font-size: 12px; color: var(--muted); }
+
+    /* micro_trend: trend line, source link, alternatives */
+    .trend { display: grid; gap: 2px; margin-bottom: 12px; padding: 10px 12px; border-radius: 10px; background: var(--soft); font-size: 13px; }
+    .trend-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+    .trend-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .trend-life { color: var(--muted); font-size: 12px; }
+    .source { display: inline-flex; align-items: center; gap: 4px; justify-self: start; max-width: 100%; margin-top: 2px;
+              font-size: 12px; color: var(--muted); text-decoration: underline; text-decoration-color: var(--line);
+              text-underline-offset: 2px; border-radius: 4px;
+              transition-property: color, text-decoration-color; transition-duration: 150ms; transition-timing-function: ease-out; }
+    .source span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* alternatives: each row is one link that opens in a new tab */
     .alts { margin-bottom: 12px; }
     .alts-label { margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -140,6 +168,35 @@
     @media (prefers-reduced-motion: no-preference) {
       a.alt-link:active { scale: 0.96; }
     }
+
+    /* good_buy: wears estimate */
+    .wears { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+    .tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: var(--muted); background: var(--soft); }
+
+    /* small-closet ownership question: quiet, sits above the buttons */
+    .own { margin-bottom: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+    .own-q { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    button.chip {
+      all: unset; box-sizing: border-box; cursor: pointer; min-height: 28px; padding: 4px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 500; color: var(--ink); background: var(--bg); box-shadow: inset 0 0 0 1px var(--line);
+      -webkit-tap-highlight-color: transparent;
+      transition-property: scale, background-color, opacity; transition-duration: 150ms; transition-timing-function: ease-out;
+    }
+    button.chip.quiet { color: var(--muted); box-shadow: none; }
+    button.chip:not(:disabled):active { scale: 0.96; }
+    button.chip:disabled { opacity: 0.55; cursor: default; }
+    button.chip[aria-busy="true"] { opacity: 1; background: var(--soft); }
+    .own-note { font-size: 12px; color: var(--danger); margin-top: 6px; }
+    .own-note:empty { display: none; }
+    .own-done { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+    .own-done svg { width: 14px; height: 14px; flex: none; color: var(--accent); }
+
+    @media (hover: hover) {
+      .source:hover { color: var(--ink); text-decoration-color: currentColor; }
+      button.chip:not(:disabled):hover { background: var(--soft); }
+    }
+    .source:focus-visible, button.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .row { display: flex; gap: 8px; align-items: center; }
     .row .primary, .row .secondary { flex: 1; }
     .status { margin-top: 10px; font-size: 12px; color: var(--muted); }
@@ -166,6 +223,11 @@
     .error-box { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); margin-bottom: 12px; }
     .error-box svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
     .error-box p { color: var(--ink); }
+
+    /* ---------- unavailable (calm, not an error) ---------- */
+    .calm { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
+    .calm svg { width: 18px; height: 18px; flex: none; margin-top: 1px; color: var(--muted); }
+    .calm-title { font-weight: 600; }
 
     /* ---------- notice (removal confirmation) ---------- */
     .notice {
