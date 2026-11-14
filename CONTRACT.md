@@ -22,7 +22,7 @@ Change rules
 - Backend: FastAPI on Hiresh's laptop, port 8000. `host_permissions` and CORS allow the extension and localhost. Run from main with `uvicorn backend.main:app --reload --port 8000`.
 - DB: MongoDB Atlas, database name `secondlook` (hardcoded in `backend/settings.py`, `DB_NAME`). Collections: `users`, `closet_items`, `trends`, `verdicts`, `ingest_jobs`. Closet vector search needs Atlas (`$vectorSearch`).
 - Secrets: `.env` only (`MONGODB_URI`, `JWT_SECRET`, API keys). Never commit them or print them.
-- Models: Gemini for attributes, text structuring and embeddings (`gemini-embedding-2`, 768 dims). Claude for the trend agent (Claude web search, tool type `web_search_20260318`) and, from Part 5, the verdict call.
+- Models: Gemini for attributes, text structuring and embeddings (`gemini-embedding-2`, 768 dims). Claude for the trend agent (Claude web search, tool type `web_search_20260318`), the Part 5 verdict call, and the final price tier (`/read-price`).
 - Gemini 503s are frequent. Every Gemini call retries up to 4 attempts (2, 4, 8 s waits) and every caller has a fallback (section 8).
 - Demo login: `demo@secondlook.test`. Auth is JWT (`/auth/signup`, `/auth/login`, `/auth/me`).
 
@@ -36,6 +36,9 @@ Item { "name": "string", "image_url": "string|null", "price": 19.99, "store": "s
 - `price` is dollars, `>= 0`, or null.
 - The extension keeps price source (dom, jsonld, meta, Gemini via `/read-page`) in its own logs. It is not part of the API.
 - `POST /read-page` takes `{url, text (max 50000, first 8000 used), image_url?}` and returns `{name?, price?, image_url?}`. Used when the DOM price tier fails.
+- `POST /read-price` (final price tier, Claude) takes `{url (max 4000), name?: string (max 300), windows: [string]}` (1 to 24 windows, 2000 chars each, 8000 total, at least one not blank, else 422) and returns `{price: number|null, price_text: string|null}`. It never answers 5xx: any Claude failure gives nulls.
+- Price tiers in order: JSON-LD, meta, DOM price, `/read-page` (Gemini, first 8000 chars), then `/read-price` (Claude) only when a name exists and price is still null. Price sources: `jsonld | meta | dom | gemini | claude`.
+- Claude tier rules: the extension sends windows of the full visible text: the add-to-cart area (largest container under 1500 chars) plus 120 chars around every amount (`$`, `€`, `£`, or `USD`, `EUR`, `GBP`, `CAD` after), merged, capped at 20 windows and 6000 chars, never cutting an amount. Claude returns `price_text` through a strict forced tool. The backend accepts it only if it appears verbatim in the windows (not inside a longer number) and parses with the same rules as `price.js`. Timeouts: Claude 4 s (hard cutoff 4.2 s), extension wait 5 s, then the card asks for the price as before. Diagnose shows `tiers.claude`.
 
 Rules that must stay true
 - Price is the displayed non-member price for the selected variant. H&M ProductGroup pages resolve the variant by URL code, sku or color, never the first variant.
@@ -254,7 +257,8 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 61/61 after the Part 6 merge (60/60 twice after the Photon merge), unittest 133/133, card harness 65/65, with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
+- Last known results after the Claude price tier merge: unittest 147/147, price checks 23 plus 18 window checks, extension E2E 65/65 with 2 SKIP.
+- Earlier: results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 61/61 after the Part 6 merge (60/60 twice after the Photon merge), unittest 133/133, card harness 65/65, with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
 - Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@`, `test_nessie@` (Nessie enabled), `test_nessie_local@secondlook.test`, plus throwaway `e2e<timestamp>@example.com` users.
 - E2E has a SKIP result for checks that need data the shared DB does not have yet. A SKIP is not a pass.
 - Before any merge to main: all suites pass, then a smoke test of the chain `/attributes`, then embed, then `find_matches`, then trends lookup, then `/analyze`.
@@ -298,6 +302,7 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 9 | No savings endpoint | `GET /savings` with `source: nessie | local` | Contract (additive) |
 | 9 | Nessie for every user | Opt-in per user (`nessie_enabled`, set by `setup_nessie_demo.py`), so E2E users never create Nessie objects | Contract (design decision) |
 | 9 | Nessie shapes unknown | Recorded from the live smoke test: integer cents, pending then settled by a sweep, no idempotency key | Contract |
+| 2 | Price tiers end at `/read-page` (first 8000 chars) | New final tier `POST /read-price`: Claude over text windows around every amount and the add-to-cart area, verbatim check in code. Price source `claude` | Contract (additive) |
 
 ## 13. Open items
 
