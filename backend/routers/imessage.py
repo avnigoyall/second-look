@@ -6,6 +6,8 @@ shopper by phone number. A phone is linked to a users document once, with POST /
 Flow: photo texted in -> POST /imessage/analyze runs the same verdict engine as /analyze (decide) for the
 linked user -> the agent texts back `message`. When `ask_ownership` is true the agent asks "Do you already
 own this?" and sends the answer to POST /imessage/own, which adds the item to the closet on yes.
+Any other text goes to POST /imessage/ask, which answers from this account's context (closet, savings,
+recent verdicts, recent conversation). Every turn of a linked phone is stored in `imessage_messages`.
 """
 import hmac
 import logging
@@ -21,6 +23,8 @@ from pymongo import ASCENDING, DESCENDING
 from backend.db import closet_items, users, verdicts
 from backend.phone import PhoneError
 from backend.phone import normalize_phone as to_e164
+from backend.services import imessage_ask
+from backend.services.account_context import build_context, record_turn
 from backend.services.closet import item_name, new_closet_doc
 from backend.services.embeddings import EmbeddingError
 from backend.services.verdict import decide
@@ -100,6 +104,15 @@ class OwnResponse(BaseModel):
     message: str
 
 
+class AskRequest(BaseModel):
+    phone: str
+    text: str = Field(min_length=1, max_length=10000, description="The shopper's message (stored capped at 2000)")
+
+
+class AskResponse(BaseModel):
+    message: str = Field(description="Ready-to-send iMessage text")
+
+
 # ---------- message text ----------
 
 def verdict_message(resp) -> str:
@@ -141,6 +154,8 @@ def link(body: LinkRequest, x_agent_secret: str | None = Header(None)):
         return {"linked": False}
     users.update_many({"phone": phone, "_id": {"$ne": user["_id"]}}, {"$unset": {"phone": ""}})
     users.update_one({"_id": user["_id"]}, {"$set": {"phone": phone}})
+    record_turn(user, phone, "in", "link", email)
+    record_turn(user, phone, "out", "link", f"Linked to {user['email']}.")
     return {"linked": True, "email": user["email"]}
 
 
@@ -164,10 +179,14 @@ def analyze(body: AnalyzeImessageRequest, x_agent_secret: str | None = Header(No
                             {"$set": {"item.image_url": None, "channel": "imessage"}})
 
     has_attrs = bool(record.get("attributes"))
+    message = verdict_message(response)
+    phone = normalize_phone(body.phone)
+    record_turn(user, phone, "in", "photo", body.text, verdict_id=response.verdict_id)
+    record_turn(user, phone, "out", "verdict", message, verdict_id=response.verdict_id)
     return {
         "verdict_id": response.verdict_id,
         "verdict": response.verdict,
-        "message": verdict_message(response),
+        "message": message,
         "ask_ownership": has_attrs and response.verdict != "have_this_look",
     }
 
@@ -180,7 +199,14 @@ def own(body: OwnRequest, x_agent_secret: str | None = Header(None)):
     user = user_for_phone(body.phone)
     if user is None:
         raise HTTPException(404, "phone_not_linked")
+    phone = normalize_phone(body.phone)
+    record_turn(user, phone, "in", "ownership", "yes" if body.owns else "no")
+    result = _own(user, body.owns)
+    record_turn(user, phone, "out", "ownership", result["message"])
+    return result
 
+
+def _own(user: dict, owns: bool) -> dict:
     since = datetime.now(timezone.utc) - OWNERSHIP_WINDOW
     doc = verdicts.find_one(
         {"user_id": user["_id"], "channel": "imessage", "ownership": {"$exists": False}, "created_at": {"$gte": since}},
@@ -189,8 +215,8 @@ def own(body: OwnRequest, x_agent_secret: str | None = Header(None)):
     if doc is None:
         return {"ok": False, "message": "Send me a photo of something you're thinking about buying first."}
 
-    verdicts.update_one({"_id": doc["_id"]}, {"$set": {"ownership": "yes" if body.owns else "no"}})
-    if not body.owns:
+    verdicts.update_one({"_id": doc["_id"]}, {"$set": {"ownership": "yes" if owns else "no"}})
+    if not owns:
         return {"ok": True, "message": "Got it, not in your closet. Send another photo whenever you're deciding on something."}
 
     attrs = doc.get("attributes")
@@ -205,3 +231,21 @@ def own(body: OwnRequest, x_agent_secret: str | None = Header(None)):
         return {"ok": False, "message": "I couldn't save that just now. Reply yes again in a minute."}
     closet_items.insert_one(closet_doc)
     return {"ok": True, "message": f"Added the {closet_doc['name']} to your closet. I'll flag lookalikes next time."}
+
+
+@router.post("/ask", response_model=AskResponse)
+def ask(body: AskRequest, x_agent_secret: str | None = Header(None)):
+    """Answer any other text from this account's own context. Claude failures answer a fallback message, never 5xx."""
+    require_agent(x_agent_secret)
+    ensure_phone_index()
+    user = user_for_phone(body.phone)
+    if user is None:
+        raise HTTPException(404, "phone_not_linked")
+    phone = normalize_phone(body.phone)
+    question = body.text.strip()[:2000]
+    context = build_context(user)  # read before this turn is stored, so the question is not in its own history
+    message, info = imessage_ask.answer(context, question)
+    log.info("imessage ask: ok=%s %d ms", info["ok"], info["latency_ms"])
+    record_turn(user, phone, "in", "text", question)
+    record_turn(user, phone, "out", "answer", message)
+    return {"message": message}
