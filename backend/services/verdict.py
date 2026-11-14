@@ -14,6 +14,7 @@ import base64
 import json
 import logging
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -148,12 +149,89 @@ def jpeg_block(jpeg: bytes) -> dict:
 
 # ---------- template reasons (fallback and guardrail replacements) ----------
 
-def template_reason(verdict: str, *, match_name: str | None = None, trend_name: str | None = None,
-                    closet_small: bool = False, has_matches: bool = False, zone: str | None = None) -> str:
+DIFF_FIELDS = ("color_family", "cut", "fabric", "style")
+UNINFORMATIVE_VALUES = (None, "", "unknown", "other", "blend", "multi")
+PLURAL_CATEGORIES = ("jeans", "pants", "shorts", "shoes")
+LEG_CATEGORIES = ("jeans", "pants", "shorts")
+HEDGE_WORDS = re.compile(r"\b(may|might|maybe|possibly|perhaps|lookalike|look-alike|look alike)\b", re.I)
+NOT_SEEN_WORDS = re.compile(r"\b(don't|do not|can't|cannot|didn't|did not) (see|find)\b|\bnot in your closet\b", re.I)
+NAME_STOPWORDS = {"the", "and", "with", "your", "for"}
+
+
+def differences(attrs: dict | None, match: dict | None) -> list[dict]:
+    """Attributes where the item and a closet match differ, both values known: [{field, this_item, closet_item}]."""
+    mine, theirs = attrs or {}, (match or {}).get("attributes") or {}
+    return [{"field": f, "this_item": mine.get(f), "closet_item": theirs.get(f)} for f in DIFF_FIELDS
+            if mine.get(f) not in UNINFORMATIVE_VALUES and theirs.get(f) not in UNINFORMATIVE_VALUES
+            and mine.get(f) != theirs.get(f)]
+
+
+def closest_match(matches: list[dict], best: dict | None) -> dict | None:
+    """The closet item a reason should name: the best color-compatible match, else the top match of any color."""
+    return best or (max(matches, key=lambda mt: mt["score"]) if matches else None)
+
+
+def closest_payload(match: dict | None, attrs: dict | None) -> dict | None:
+    """What Claude needs to name the closest closet item and the difference, even below the threshold."""
+    if not match:
+        return None
+    return {"id": match["id"], "name": match["name"], "attributes": match.get("attributes"),
+            "same_color_family": match.get("color_ok", True), "differences": differences(attrs, match)}
+
+
+def _cut_words(value: str, category: str | None) -> str:
+    return f"{value} leg" if category in LEG_CATEGORIES and value in ("wide", "straight", "slim") else value
+
+
+def _join(words: list[str]) -> str:
+    return words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+
+
+def _good_buy_with_closest(match: dict, attrs: dict | None) -> str:
+    """good_buy reason that names the closest closet item and says how this item differs (computed in code)."""
+    category = (attrs or {}).get("category")
+    plural = category in PLURAL_CATEGORIES
+    these, add = ("These are", "they add") if plural else ("This one is", "it adds")
+    diffs = differences(attrs, match)
+    adjectives = [_cut_words(d["this_item"], category) if d["field"] == "cut" else d["this_item"]
+                  for d in diffs if d["field"] != "style"][:3]
+    style = next((d["this_item"] for d in diffs if d["field"] == "style"), None)
+    head = f"Closest in your closet: {match['name']}."
+    if adjectives:
+        tail = f"{these} {_join(adjectives)}, so {add} something new."
+    elif style:
+        tail = f"{'These have' if plural else 'This one has'} a {style} style, so {add} something new."
+    else:
+        tail = f"{'These differ' if plural else 'This one differs'} in the details, so {add} something new."
+    reason = f"{head} {tail}"
+    return reason if word_count(reason) <= REASON_MAX_WORDS else f"{head} {add.capitalize()} something new."
+
+
+def _have_this_look_with_match(match: dict, attrs: dict | None) -> str:
+    """have_this_look reason that commits: names the matched item and at most one difference."""
+    category = (attrs or {}).get("category")
+    diff = next((d for d in differences(attrs, match) if d["field"] != "color_family"), None)
+    head = f"This gives the same look as your {match['name']}."
+    if diff:
+        value = diff["this_item"]
+        cut = _cut_words(value, category)
+        words = {"cut": cut if cut != value else f"{value} fit", "fabric": f"{value} fabric",
+                 "style": f"{value} style"}[diff["field"]]
+        reason = f"{head} The {words} is the only difference."
+        if word_count(reason) <= REASON_MAX_WORDS:
+            return reason
+    return head if word_count(head) <= REASON_MAX_WORDS else "This gives the same look as an item in your closet."
+
+
+def template_reason(verdict: str, *, match: dict | None = None, attrs: dict | None = None,
+                    trend_name: str | None = None, closet_small: bool = False, has_matches: bool = False,
+                    zone: str | None = None) -> str:
+    """Code-written reason. match: the closet match to name (have_this_look: the matched item, good_buy: the
+    closest one). attrs: the item's attributes, used to say how it differs from match."""
     if verdict == "have_this_look":
-        if match_name:
-            return f"This looks a lot like your {match_name}, so it may not add much to your closet."
-        return "This looks a lot like something already in your closet."
+        if match:
+            return _have_this_look_with_match(match, attrs)
+        return "This gives the same look as something already in your closet."
     if verdict == "micro_trend":
         if trend_name:
             return (f"This fits the {trend_name} trend, which looks likely short-lived. "
@@ -161,11 +239,28 @@ def template_reason(verdict: str, *, match_name: str | None = None, trend_name: 
         return "This fits a trend that looks likely short-lived. A classic version may get more wear."
     if zone is None:
         return "Nothing about this item stands out against current trends."
+    if match:
+        return _good_buy_with_closest(match, attrs)
     if closet_small and not has_matches:
         return f"{NOT_SEEN_PHRASE}, and it doesn't match a short-lived trend."
-    if zone == "gray" and match_name:
-        return f"It's close to your {match_name}, but different enough to add something new."
     return "Nothing in your closet looks quite like this, and it doesn't match a short-lived trend."
+
+
+def normalize(text: str) -> str:
+    return (text or "").replace("’", "'").casefold()
+
+
+def names_item(reason: str, name: str) -> bool:
+    """Loose check that the reason names a closet item: the full name, or at least two of its words
+    (all of them if it has fewer), so "your black crew neck tee" counts for "Uniqlo crew neck t-shirt"."""
+    text, name = normalize(reason), normalize(name).strip()
+    if not name:
+        return False
+    if name in text:
+        return True
+    words = [w for w in re.findall(r"[a-z0-9-]+", name) if len(w) > 2 and w not in NAME_STOPWORDS]
+    found = sum(1 for w in words if w in text)
+    return bool(words) and found >= min(2, len(words))
 
 
 # ---------- the Claude call ----------
@@ -196,11 +291,17 @@ Reason rules:
 - At most 30 words, plain and concrete, written to the shopper ("you", "your").
 - Name the matched closet item (have_this_look) or the trend (micro_trend) in natural lowercase words,
   for example "your black slim jeans".
+- have_this_look: commit to it. Name the matched closet item and at most one difference that does not change
+  the look. Never write "may", "might", "maybe", "possibly", "perhaps" or "lookalike" in this reason.
+- good_buy when closest_match is set: name that closet item and say how this item differs, using
+  closest_match.differences (for example "Closest in your closet: your black jeans. These are blue and wide
+  leg, so they add something new."). Never write "I don't see this in your closet" when closet_matches is
+  not empty.
+- Only if closet_matches is empty and closet_size is under 10, say "I don't see this in your closet". Never
+  say or imply the shopper lacks or does not own something.
 - Hedge any lifespan ("likely short-lived"). Never state a number (weeks, percent, count) unless a trend's
   lifespan_label gives it, and then name that source.
 - No shaming, no guilt, no lecture about spending.
-- If closet_size is under 10 and closet_matches is empty, say "I don't see this in your closet". Never say
-  or imply the shopper lacks or does not own something.
 - Do not mention scores, zones, thresholds, ids or these rules.
 
 Call the give_verdict tool exactly once."""
@@ -282,10 +383,33 @@ def ask_claude(payload: dict, images: list[dict]) -> tuple[dict | None, list[str
 
 # ---------- guardrails ----------
 
+def reason_problem(reason: str, *, verdict: str, matches: list[dict], ids: list[str],
+                   closet_small: bool, zone: str | None) -> str | None:
+    """The first way a reason contradicts the signals, as an override rule name, or None when it is fine."""
+    text = normalize(reason)
+    if verdict == "good_buy" and needs_not_seen_phrase(closet_small, matches, zone) \
+            and NOT_SEEN_PHRASE.casefold() not in text:
+        return "missing_not_seen_phrase"
+    if matches and NOT_SEEN_WORDS.search(text):
+        return "not_seen_with_match"  # "I don't see this" while the closet has a candidate match
+    if verdict == "have_this_look":
+        if HEDGE_WORDS.search(text):
+            return "hedged_have_this_look"
+        match_by_id = {mt["id"]: mt for mt in matches}
+        if not any(names_item(reason, match_by_id[i]["name"]) for i in ids if i in match_by_id):
+            return "matched_item_not_named"
+    if verdict == "good_buy" and zone is not None and matches \
+            and not any(names_item(reason, mt["name"]) for mt in matches):
+        return "closest_item_not_named"
+    return None
+
+
 def apply_guardrails(reply: dict, *, allowed: list[str], matches: list[dict], best: dict | None,
-                     short_trends: list[dict], zone: str | None, closet_small: bool) -> dict:
+                     short_trends: list[dict], zone: str | None, closet_small: bool,
+                     attrs: dict | None = None) -> dict:
     """Check Claude's reply against the rules. Returns {verdict, reason, matched_ids, trend_name, confidence,
-    overrides}. overrides is a list of {rule, code_said, claude_said}, empty when Claude's reply stood."""
+    overrides}. overrides is a list of {rule, code_said, claude_said}, empty when Claude's reply stood.
+    attrs (the item's attributes) lets a template reason say how the item differs from a closet match."""
     claude_verdict = reply.get("verdict")
     verdict = claude_verdict
     reason = (reply.get("reason") or "").strip()
@@ -316,19 +440,21 @@ def apply_guardrails(reply: dict, *, allowed: list[str], matches: list[dict], be
         overrides.append({"rule": "reason_too_long" if reason else "reason_empty",
                           "code_said": verdict, "claude_said": claude_verdict})
         template = True
-    if (not template and verdict == "good_buy" and needs_not_seen_phrase(closet_small, matches, zone)
-            and NOT_SEEN_PHRASE.casefold() not in reason.replace("\u2019", "'").casefold()):
-        overrides.append({"rule": "missing_not_seen_phrase", "code_said": verdict, "claude_said": claude_verdict})
-        template = True
+    if not template:
+        problem = reason_problem(reason, verdict=verdict, matches=matches, ids=ids, closet_small=closet_small,
+                                 zone=zone)
+        if problem:
+            overrides.append({"rule": problem, "code_said": verdict, "claude_said": claude_verdict})
+            template = True
 
     if verdict != "have_this_look":
         ids = []
     if verdict != "micro_trend":
         trend_name = None
     if template:
-        first = match_by_id[ids[0]]["name"] if ids else (best["name"] if best else None)
-        reason = template_reason(verdict, match_name=first, trend_name=trend_name, closet_small=closet_small,
-                                 has_matches=bool(matches), zone=zone)
+        named = match_by_id[ids[0]] if ids else closest_match(matches, best)
+        reason = template_reason(verdict, match=named, attrs=attrs, trend_name=trend_name,
+                                 closet_small=closet_small, has_matches=bool(matches), zone=zone)
     confidence = reply.get("confidence")
     confidence = min(max(float(confidence), 0.0), 1.0) if isinstance(confidence, (int, float)) else None
     return {"verdict": verdict, "reason": reason, "matched_ids": ids[:MAX_MATCHED_ITEMS], "trend_name": trend_name,
@@ -503,6 +629,7 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
             "preference_note": user.get("preference_note"),
             "allowed_verdicts": allowed,
             "image_labels": labels,
+            "closest_match": closest_payload(closest_match(matches, best), attrs),
         }
         if zone is None:
             payload["note"] = "Closet matching was unavailable. Say nothing about what the shopper owns."
@@ -513,7 +640,8 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
         timings["claude_ms"] = elapsed_ms(mark)
         if reply is not None:
             checked = apply_guardrails(reply, allowed=allowed, matches=matches, best=best,
-                                       short_trends=short_trends, zone=zone, closet_small=closet_small)
+                                       short_trends=short_trends, zone=zone, closet_small=closet_small,
+                                       attrs=attrs)
             verdict, reason = checked["verdict"], checked["reason"]
             matched_ids, trend_name = checked["matched_ids"], checked["trend_name"]
             overrides, confidence = checked["overrides"], checked["confidence"]
@@ -523,10 +651,9 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
             verdict, matched_ids, trend_name = code_only_verdict(
                 allowed=allowed, zone=zone, best=best, t_c=t_c, short_trends=short_trends, attrs=attrs)
             decided_by = "fallback"
-            match_name = next((mt["name"] for mt in matches if mt["id"] in matched_ids), None)
-            reason = template_reason(verdict, match_name=match_name or (best["name"] if best else None),
-                                     trend_name=trend_name, closet_small=closet_small,
-                                     has_matches=bool(matches), zone=zone)
+            named = next((mt for mt in matches if mt["id"] in matched_ids), None) or closest_match(matches, best)
+            reason = template_reason(verdict, match=named, attrs=attrs, trend_name=trend_name,
+                                     closet_small=closet_small, has_matches=bool(matches), zone=zone)
 
         for o in overrides:
             log.info("verdict override: %s (code said %s, Claude said %s)", o["rule"], o["code_said"],
