@@ -8,6 +8,9 @@ linked user -> the agent texts back `message`. When `ask_ownership` is true the 
 own this?" and sends the answer to POST /imessage/own, which adds the item to the closet on yes.
 Any other text goes to POST /imessage/ask, which answers from this account's context (closet, savings,
 recent verdicts, recent conversation). Every turn of a linked phone is stored in `imessage_messages`.
+
+Two endpoints are for the extension instead (JWT, the logged-in shopper): POST /imessage/connect assigns the
+account's phone a Photon iMessage line, GET /imessage/status reports it (backend/services/photon_lines.py).
 """
 import hmac
 import logging
@@ -16,14 +19,19 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
-from fastapi import APIRouter, Header, HTTPException
+from typing import Literal
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 from pymongo import ASCENDING, DESCENDING
+from pymongo.errors import DuplicateKeyError
+
+from backend.auth import current_user
 
 from backend.db import closet_items, users, verdicts
 from backend.phone import PhoneError
 from backend.phone import normalize_phone as to_e164
-from backend.services import imessage_ask
+from backend.services import imessage_ask, photon_lines
 from backend.services.account_context import build_context, record_turn
 from backend.services.closet import item_name, new_closet_doc
 from backend.services.embeddings import EmbeddingError
@@ -111,6 +119,17 @@ class AskRequest(BaseModel):
 
 class AskResponse(BaseModel):
     message: str = Field(description="Ready-to-send iMessage text")
+
+
+class ConnectRequest(BaseModel):
+    phone: str | None = Field(None, max_length=40, description="Optional. Sets or replaces the account's phone first")
+
+
+class ConnectStatus(BaseModel):
+    status: Literal["none", "assigning", "pending_optin", "connected", "error"]
+    line: str | None = Field(None, description="E.164 of the account's iMessage line, when it has one")
+    phone: str | None = Field(None, description="The account's own phone (E.164)")
+    message: str
 
 
 # ---------- message text ----------
@@ -249,3 +268,29 @@ def ask(body: AskRequest, x_agent_secret: str | None = Header(None)):
     record_turn(user, phone, "in", "text", question)
     record_turn(user, phone, "out", "answer", message)
     return {"message": message}
+
+
+# ---------- extension endpoints (JWT): the shopper's own iMessage line ----------
+
+@router.post("/connect", response_model=ConnectStatus)
+def connect(body: ConnectRequest | None = None, user=Depends(current_user)):
+    """Assign this account's phone a Photon iMessage line (idempotent). Photon failures answer 200 with
+    status "error" and a user-safe message. 400 when the account has no phone and none is given."""
+    if body and body.phone and body.phone.strip():
+        phone = normalize_phone(body.phone)
+        if phone != user.get("phone"):
+            if users.find_one({"phone": phone, "_id": {"$ne": user["_id"]}}):
+                raise HTTPException(409, "This phone number is already linked to another account")
+            try:
+                users.update_one({"_id": user["_id"]}, {"$set": {"phone": phone}, "$unset": {"photon_error": ""}})
+            except DuplicateKeyError:
+                raise HTTPException(409, "This phone number is already linked to another account")
+    elif not user.get("phone"):
+        raise HTTPException(400, "Add your phone number first")
+    return photon_lines.assign_user(user["_id"])
+
+
+@router.get("/status", response_model=ConnectStatus)
+def status(user=Depends(current_user)):
+    """This account's iMessage line. Refreshes opt-in from Photon at most once a minute."""
+    return photon_lines.status_for(photon_lines.refresh_opt_in(user))

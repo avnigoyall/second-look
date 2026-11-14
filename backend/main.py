@@ -27,6 +27,7 @@ from backend.routers import imessage as imessage_router
 from backend.routers import trends as trends_router
 from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
 from backend.services.embeddings import EmbeddingError
+from backend.services import photon_lines
 from backend.services.money import money_kept, on_skip, savings_summary
 from backend.services.verdict import decide
 from backend.settings import ROOT
@@ -82,7 +83,8 @@ def oid(value: str) -> ObjectId:
 
 def user_out(doc) -> m.User:
     return m.User(id=str(doc["_id"]), email=doc["email"], profile_type=doc["profile_type"],
-                  preference_note=doc.get("preference_note"), created_at=doc["created_at"], phone=doc.get("phone"))
+                  preference_note=doc.get("preference_note"), created_at=doc["created_at"], phone=doc.get("phone"),
+                  imessage_line=doc.get("photon_line") if photon_lines.has_assignment(doc) else None)
 
 
 def closet_out(doc, include_image=True) -> m.ClosetItem:
@@ -125,8 +127,10 @@ def health():
 
 
 @app.post("/auth/signup", response_model=m.AuthResponse)
-def signup(body: m.SignupRequest):
-    """phone is optional. When given it is stored as E.164 (backend/phone.py), which links the account to iMessage."""
+def signup(body: m.SignupRequest, background: BackgroundTasks):
+    """phone is optional. When given it is stored as E.164 (backend/phone.py), which links the account to iMessage,
+    and a Photon iMessage line is assigned in the background after the response (never slows or fails signup).
+    GET /imessage/status reports "assigning" until that finishes, then the line."""
     phone = None
     if body.phone and body.phone.strip():
         try:
@@ -143,14 +147,19 @@ def signup(body: m.SignupRequest):
         "preference_note": None,
         "created_at": now(),
     }
+    auto_assign = bool(phone) and photon_lines.configured()
     if phone:
         doc["phone"] = phone  # left out when absent: the unique index on phone is sparse
+    if auto_assign:
+        doc["photon_assigning_at"] = doc["created_at"]
     try:
         doc["_id"] = users.insert_one(doc).inserted_id
     except DuplicateKeyError as e:
         if phone and "phone" in str(e.details.get("keyPattern", {})):
             raise HTTPException(409, "This phone number is already linked to another account")
         raise HTTPException(409, "An account with this email already exists")
+    if auto_assign:
+        background.add_task(photon_lines.assign_user_quietly, doc["_id"])
     return {"token": create_token(str(doc["_id"])), "user": user_out(doc)}
 
 
