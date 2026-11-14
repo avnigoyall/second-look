@@ -67,6 +67,36 @@ button.link:not(:disabled):active { scale: 1; }
 .hint { margin-top: -4px; text-wrap: pretty; }
 #who { white-space: pre-line; }
 
+/* ---------- iMessage line ---------- */
+.imsg {
+  display: grid; grid-template-columns: 20px 1fr; gap: 4px 10px; align-items: start;
+  padding: 10px 12px; border-radius: 12px; background: var(--card); box-shadow: var(--shadow);
+  border: 1px solid transparent; font-size: 13px;
+}
+.imsg-icon { width: 20px; height: 20px; color: var(--accent); margin-top: 1px; }
+.imsg-body { display: grid; gap: 2px; min-width: 0; }
+.imsg-body p { text-wrap: pretty; }
+/* The line number: a tappable sms: link, kept on one line. */
+.imsg-line {
+  font-weight: 700; color: var(--accent); white-space: nowrap; font-variant-numeric: tabular-nums;
+  text-decoration: underline; text-decoration-color: color-mix(in oklch, var(--accent), transparent 60%);
+  text-underline-offset: 3px; border-radius: 4px;
+}
+.imsg-line:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (hover: hover) { .imsg-line:hover { text-decoration-color: var(--accent); } }
+.imsg-form { grid-column: 2; display: flex; gap: 6px; margin-top: 4px; }
+.imsg-form input { flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px; border-radius: 8px; }
+.imsg-form button { flex: none; }
+/* Connected: one quiet line, no card. */
+.imsg[data-state="connected"] {
+  padding: 0; background: none; box-shadow: none; border: 0; grid-template-columns: 14px 1fr; gap: 6px;
+  align-items: center; color: var(--muted); font-size: 12px;
+}
+.imsg[data-state="connected"] .imsg-icon { width: 14px; height: 14px; margin: 0; color: var(--good); }
+.imsg[data-state="connected"] .imsg-line { font-weight: 600; color: var(--muted); text-decoration: none; }
+.imsg[data-state="assigning"] #imsg-text { color: var(--muted); }
+.imsg[data-state="error"] #imsg-text { color: var(--danger); font-size: 12px; }
+
 /* ---------- savings summary (non-product pages) ---------- */
 .stack { display: grid; gap: 10px; }
 .summary { margin-top: 0; padding-top: 4px; border-top: 0; }
