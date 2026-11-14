@@ -235,7 +235,8 @@
       }
       if (action === "bought") return setStatus("Marked as bought.");
       const moved = movedCents(res);
-      if (moved == null) setStatus(SKIP_PENDING);
+      if (res?.transfer?.status === "no_price") setStatus(SKIP_NO_PRICE);
+      else if (moved == null) setStatus(SKIP_PENDING);
       else setSaved(`Skipped. ${money(moved / 100)} moved to savings`);
     }
     skip.addEventListener("click", () => act("skipped"));
@@ -268,10 +269,11 @@
   // ---------- Skip it confirmation ----------
 
   const SKIP_PENDING = "Skipped. Savings update pending";
+  const SKIP_NO_PRICE = "Skipped. No price, so nothing moved"; // final, not pending: plain muted status
 
   // POST /action returns transfer { status, amount_cents } when the savings transfer ran.
-  // Only "done" with a positive amount counts as moved. pending, failed, no_price, or no
-  // transfer field at all (older backend) read as pending, never as an error.
+  // Only "done" with a positive amount counts as moved. no_price says nothing moved. pending,
+  // failed, or no transfer field at all (older backend) read as pending, never as an error.
   function movedCents(res) {
     const t = res?.transfer;
     if (t?.status !== "done") return null;
