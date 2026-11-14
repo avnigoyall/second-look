@@ -249,7 +249,7 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 11 | Per-agent DB name | `DB_NAME` hardcoded. Use test users | Contract |
 | 3 | `/attributes` response ends at `attribute_string` | Fix A adds optional `target_box_2d`, `other_garments_visible`, `category_check`, `target_crop`. Name check can force the category | Contract (additive) |
 | 6 | Trend alternatives are text only | Fix B adds optional `product_name, product_url, price, store, verified_at, link_kind` | Contract (additive) |
-| 7 | `Alternative.url` is `string|null` | Fix B makes it required and non-empty, adds `store` and `link_kind`. This tightens an existing response field (needs Hiresh's sign-off before push) | Contract |
+| 7 | `Alternative.url` is `string|null` | Fix B makes it required and non-empty, adds `store` and `link_kind`. This tightens an existing response field (shipped with Change B, Nov 14) | Contract |
 | 7 | Verdict doc has no crop | Optional `target_crop` on stored verdicts (Fix A) | Contract (additive) |
 | 7 | `/analyze` is a stub | Part 5 engine replaces it. Stub cycling removed | Contract |
 | 7 | Claude call at temperature 0 | API rejects `temperature` on `claude-haiku-5-5`, so it is omitted. Forced tool use with strict schema, effort low, thinking disabled | Contract |
