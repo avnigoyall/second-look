@@ -237,6 +237,52 @@ async function shot(page, name) {
     }
   }
 
+  // Savings goal (CONTRACT section 15): one extra line under the skip message when /action sends goal.
+  const done = { status: "done", amount_cents: 2577 };
+  const GOAL_CASES = [
+    { tag: "none", transfer: done, goal: undefined, line: null },
+    { tag: "progress", transfer: done, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 34000, reached: false }, line: "$340 of $2,000 for Japan trip" },
+    { tag: "cents", transfer: done, goal: { name: "Japan trip", target_cents: 1250050, saved_cents: 34099, reached: false }, line: "$340.99 of $12,500.50 for Japan trip" },
+    { tag: "pending", transfer: { status: "pending", amount_cents: 2577 }, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 34000, reached: false }, line: "$340 of $2,000 for Japan trip" },
+    { tag: "reached", transfer: done, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 201577, reached: true }, line: "Japan trip: you made it" },
+    { tag: "html-name", transfer: done, goal: { name: "<b>New bike</b>", target_cents: 50000, saved_cents: 12345, reached: false }, line: "$123.45 of $500 for <b>New bike</b>" },
+  ];
+  for (const v of variants) {
+    for (const c of GOAL_CASES) {
+      const data = { ok: true, balances, transfer: c.transfer, ...(c.goal ? { goal: c.goal } : {}) };
+      const s = await open(browser, { ...v, response: RESPONSES.have, action: { data } });
+      await s.card.locator(".badge").waitFor();
+      await s.card.getByRole("button", { name: "Skip it" }).click();
+      await s.card.locator(".status").filter({ hasText: "Skipped." }).waitFor({ timeout: 3000 });
+      const line = s.card.locator(".goal-line");
+      const visible = await line.isVisible();
+      if (v.tag === "desktop-light") {
+        if (c.line == null) {
+          check(!visible && (await line.textContent()) === "", `goal ${c.tag}: no goal line`);
+        } else {
+          check(visible && (await line.textContent()) === c.line, `goal ${c.tag}: "${c.line}"`, await line.textContent());
+        }
+        check(/^Skipped\./.test((await s.card.locator(".status").innerText()).trim()), `goal ${c.tag}: skip message unchanged`);
+        check(await s.card.locator(".goal-line b, .card button:not(.icon-btn):not(.btn)").count() === 0, `goal ${c.tag}: no injected HTML, no new buttons`);
+        check(await s.page.locator("body > .goal-line, body b").count() === 0, `goal ${c.tag}: nothing leaks out of the shadow root`);
+      }
+      shots.push(await shot(s.page, `goal-${c.tag}-${v.tag}`));
+      errors.push(...s.page.errors); await s.ctx.close();
+    }
+  }
+  // a goal never shows after Buy anyway or a failed skip
+  for (const [tag, click, action] of [
+    ["bought", "Buy anyway", { data: { ok: true, balances, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 34000, reached: false } } }],
+    ["error", "Skip it", { code: "offline", error: "Cannot reach the Second Look server." }],
+  ]) {
+    const s = await open(browser, { width: 1280, scheme: "light", response: RESPONSES.have, action });
+    await s.card.locator(".badge").waitFor();
+    await s.card.getByRole("button", { name: click }).click();
+    await s.card.locator(".status").filter({ hasNotText: "Saving..." }).waitFor({ timeout: 3000 });
+    check(!(await s.card.locator(".goal-line").isVisible()), `goal ${tag}: no goal line`);
+    errors.push(...s.page.errors); await s.ctx.close();
+  }
+
   // Button order and emphasis follow the verdict: good_buy highlights "Buy it", the others highlight "Skip it".
   for (const [tag, response, first, primary, other] of [
     ["good_buy", RESPONSES.good, "Buy it", "Buy it", "Skip it anyway"],

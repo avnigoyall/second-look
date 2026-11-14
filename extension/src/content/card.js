@@ -191,6 +191,8 @@
   function showVerdict(item, result, handlers) {
     const b = frame(LABELS[result.verdict] || result.verdict);
     const status = el("p", { class: "status", role: "status" });
+    // Savings goal progress (CONTRACT section 15): one quiet line under the skip message.
+    const goalLine = el("p", { class: "goal-line", hidden: true });
     const setStatus = (text, isError = false) => {
       status.textContent = text;
       status.classList.toggle("error", isError);
@@ -218,6 +220,7 @@
       ...verdictDetails(result),
       actions,
       status,
+      goalLine,
     );
 
     async function act(action) {
@@ -238,6 +241,7 @@
       if (res?.transfer?.status === "no_price") setStatus(SKIP_NO_PRICE);
       else if (moved == null) setStatus(SKIP_PENDING);
       else setSaved(`Skipped. ${money(moved / 100)} moved to savings`);
+      showGoal(goalLine, res?.goal);
     }
     skip.addEventListener("click", () => act("skipped"));
     buy.addEventListener("click", () => act("bought"));
@@ -279,6 +283,33 @@
     if (t?.status !== "done") return null;
     const cents = Number(t.amount_cents);
     return Number.isFinite(cents) && cents > 0 ? cents : null;
+  }
+
+  // ---------- savings goal line ----------
+
+  // Whole dollars when the cents are 00, otherwise two decimals, with a thousands separator.
+  function dollars(cents) {
+    const digits = cents % 100 === 0 ? 0 : 2;
+    return `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+  }
+
+  // POST /action adds goal { name, target_cents, saved_cents, reached } only when the user has one.
+  // The name is user text, so it only ever goes through textContent. Missing or bad data: no line.
+  function goalText(goal) {
+    const name = typeof goal?.name === "string" ? goal.name.trim() : "";
+    if (!name) return "";
+    if (goal.reached === true) return `${name}: you made it`;
+    const saved = Math.round(Number(goal.saved_cents));
+    const target = Math.round(Number(goal.target_cents));
+    if (!Number.isFinite(saved) || !Number.isFinite(target) || saved < 0 || target <= 0) return "";
+    return `${dollars(saved)} of ${dollars(target)} for ${name}`;
+  }
+
+  function showGoal(line, goal) {
+    const text = goalText(goal);
+    line.textContent = text;
+    line.hidden = !text;
+    line.classList.toggle("reached", !!text && goal.reached === true);
   }
 
   // ---------- verdict details ----------
