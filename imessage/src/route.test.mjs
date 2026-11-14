@@ -1,7 +1,7 @@
 // Run from imessage/: npm test  (or node --test src/route.test.mjs; no install needed)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { routeMessage } from "./route.mjs";
+import { replySenderId, routeMessage } from "./route.mjs";
 
 test("attachments are photos, whatever the caption", () => {
   assert.deepEqual(routeMessage("yes", true), { kind: "photo" });
@@ -27,5 +27,16 @@ test("everything else is a question for /imessage/ask", () => {
   for (const t of ["what jeans do I have?", "how much have I saved", "hi", "help", "no, what about jeans?",
     "yes but how much did I save on that skirt last week", "nothing", "yesterday's verdict?", "noted, thanks"]) {
     assert.deepEqual(routeMessage(t, false), { kind: "ask" }, t);
+  }
+});
+
+test("replies come from the line that received the message", () => {
+  const msg = { id: "pho_msg_1", receivedBy: { id: "pho_usr_line_b", handle: "+15550199999" }, space: { id: "pho_spc_1" } };
+  assert.equal(replySenderId(msg), "pho_usr_line_b");
+});
+
+test("without receivedBy the caller falls back to the agent handle", () => {
+  for (const msg of [{}, { receivedBy: null }, { receivedBy: {} }, { receivedBy: { id: "" } }, null, undefined]) {
+    assert.equal(replySenderId(msg), null, JSON.stringify(msg));
   }
 });

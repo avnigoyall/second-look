@@ -23,9 +23,83 @@ function render({ loggedIn, email, phone }) {
   $("signup-view").hidden = loggedIn || authMode !== "signup";
   $("main-view").hidden = !loggedIn;
   $("logout").hidden = !loggedIn;
-  if (loggedIn) $("who").textContent = phone ? `Logged in as ${email}\niMessage linked: ${formatPhone(phone)}` : `Logged in as ${email}`;
+  if (loggedIn) $("who").textContent = `Logged in as ${email}`;
   if (loggedIn && !pageModeLoaded) loadPageMode();
+  if (loggedIn && !imsgLoaded) { imsgPolls = 0; loadImessage(); }
+  if (!loggedIn) { imsgLoaded = false; clearTimeout(imsgPoll); $("imsg").hidden = true; }
 }
+
+// ---------- iMessage line (GET /imessage/status, POST /imessage/connect) ----------
+
+let imsgLoaded = false;
+let imsgPoll = null;
+let imsgPolls = 0;
+let imsgPhone = null; // the account phone from the last status
+const IMSG_POLL_MS = 1500;
+const IMSG_POLL_MAX = 20; // signup's background assignment usually takes a second or two
+
+function lineLink(line) {
+  const a = document.createElement("a");
+  a.className = "imsg-line";
+  a.href = `sms:${line}`;
+  a.textContent = formatPhone(line);
+  a.title = "Open Messages";
+  return a;
+}
+
+// status: {status: none|assigning|pending_optin|connected|error, line, phone, message}
+function renderImessage(s) {
+  const box = $("imsg");
+  box.hidden = false;
+  box.dataset.state = s.status;
+  imsgPhone = s.phone;
+  const text = $("imsg-text");
+  const hint = $("imsg-hint");
+  hint.hidden = true;
+  $("imsg-form").hidden = true;
+  $("imsg-phone").hidden = Boolean(s.phone);
+  $("imsg-connect").disabled = false;
+
+  if (s.status === "connected") {
+    text.replaceChildren("iMessage connected ", lineLink(s.line));
+  } else if (s.status === "pending_optin") {
+    text.replaceChildren("Text Second Look at ", lineLink(s.line), " to start.");
+    hint.textContent = "Then send a photo of anything you are thinking about buying.";
+    hint.hidden = false;
+  } else if (s.status === "assigning") {
+    text.textContent = "Setting up your iMessage line...";
+  } else {
+    // none or error: offer Connect (with a phone field when the account has no phone yet).
+    text.textContent = s.status === "error" ? s.message : "Text photos to Second Look on iMessage.";
+    $("imsg-connect").textContent = s.status === "error" ? "Try again" : "Connect iMessage";
+    $("imsg-form").hidden = false;
+  }
+
+  clearTimeout(imsgPoll);
+  if (s.status === "assigning" && imsgPolls++ < IMSG_POLL_MAX) imsgPoll = setTimeout(loadImessage, IMSG_POLL_MS);
+}
+
+async function loadImessage() {
+  imsgLoaded = true;
+  try {
+    renderImessage(await send("IMESSAGE_STATUS"));
+  } catch {
+    $("imsg").hidden = true; // an older backend without /imessage/status: show nothing
+  }
+}
+
+$("imsg-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const phone = $("imsg-phone").hidden ? null : $("imsg-phone").value.trim();
+  if (phone === "") { $("imsg-phone").focus(); return; }
+  $("imsg-connect").disabled = true;
+  $("imsg-text").textContent = "Setting up your iMessage line...";
+  try {
+    renderImessage(await send("IMESSAGE_CONNECT", { phone }));
+  } catch (err) {
+    renderImessage({ status: "error", line: null, phone: imsgPhone, message: err.message });
+  }
+});
 
 // ---------- product page vs savings summary ----------
 
@@ -187,7 +261,7 @@ $("signup-view").addEventListener("submit", async (e) => {
     authMode = "login";
     render({ loggedIn: true, email, phone });
     setStatus("login-status", "");
-    setStatus("status", phone ? "Account created. You can also text photos to Second Look on iMessage." : "Account created.");
+    setStatus("status", "Account created.");
   } catch (err) {
     setStatus("login-status", err.message, true);
   } finally {

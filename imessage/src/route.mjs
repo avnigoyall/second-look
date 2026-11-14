@@ -13,6 +13,16 @@ const ANSWER_MAX_WORDS = 6; // "yes" / "nope, I don't" answer the ownership ques
  *   { kind: "own", owns: bool }  a short yes/no: answers "Do you already own this?"
  *   { kind: "ask" }              anything else: a question for POST /imessage/ask
  */
+/**
+ * The Photon user id to reply from: the line that received this message (`receivedBy.id`). Every shopper may
+ * have their own shared line, assigned by the backend, so replies cannot always come from PHOTON_AGENT_HANDLE.
+ * Returns null when Photon left it out; the caller then falls back to the agent handle's user.
+ */
+export function replySenderId(msg) {
+  const id = msg?.receivedBy?.id;
+  return typeof id === "string" && id ? id : null;
+}
+
 export function routeMessage(text, hasAttachment) {
   if (hasAttachment) return { kind: "photo" };
   const t = (text ?? "").trim();

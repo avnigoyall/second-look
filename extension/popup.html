@@ -36,6 +36,19 @@
   <main id="main-view" hidden>
     <p id="who" class="muted small"></p>
 
+    <!-- iMessage line: popup.js sets data-state to none | assigning | pending_optin | connected | error. -->
+    <div id="imsg" class="imsg" data-state="none" hidden>
+      <svg class="imsg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.4 8.4 0 0 1-12.2 7.5L3 21l2-5.6A8.4 8.4 0 1 1 21 11.5Z"/></svg>
+      <div class="imsg-body" role="status">
+        <p id="imsg-text"></p>
+        <p id="imsg-hint" class="small muted" hidden></p>
+      </div>
+      <form id="imsg-form" class="imsg-form" hidden>
+        <input id="imsg-phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="(510) 555-0123" aria-label="Your phone number">
+        <button type="submit" id="imsg-connect" class="secondary small">Connect iMessage</button>
+      </form>
+    </div>
+
     <!-- Product pages: check the item. Other pages: the savings summary. popup.js picks one with PAGE_KIND. -->
     <div id="product-tools" class="stack" hidden>
       <button id="check" class="primary">Check this item</button>
