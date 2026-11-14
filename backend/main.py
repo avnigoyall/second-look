@@ -18,6 +18,7 @@ from backend.images import decode_base64_image, to_data_url
 from backend.page_reader import ReadPageError, read_page
 from backend.routers import attributes as attributes_router
 from backend.routers import closet as closet_router
+from backend.routers import imessage as imessage_router
 from backend.routers import trends as trends_router
 from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
 from backend.services.embeddings import EmbeddingError
@@ -37,6 +38,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(attributes_router.router)
 app.include_router(closet_router.router)
 app.include_router(trends_router.router)
+app.include_router(imessage_router.router)
 
 
 def now():
