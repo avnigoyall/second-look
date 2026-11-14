@@ -16,6 +16,8 @@
     alert: svg('<circle cx="12" cy="12" r="9"/><path d="M12 8v4.5M12 16h.01"/>'),
     check: svg('<path d="M20 6 9 17l-5-5"/>'),
     up: svg('<path d="M7 10v11"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.3 7A2 2 0 0 1 17.5 21H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3l4-8a3 3 0 0 1 3 3.9Z"/>'),
+    external: svg('<path d="M7 17 17 7"/><path d="M8 7h9v9"/>'),
+    search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
     down: svg('<path d="M17 14V3"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.3-7A2 2 0 0 1 6.5 3H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3l-4 8a3 3 0 0 1-3-3.9Z"/>'),
   };
 
@@ -100,6 +102,37 @@
     ]);
   }
 
+  // Alternatives (micro_trend verdicts). Each one is a single link that opens in a new tab: a product
+  // page (name, price, store) or, when link_kind is "search", a store search ("Search Gap for ...").
+  // Alternatives without an http(s) url are skipped, so nothing shows without a link.
+  const httpUrl = (u) => typeof u === "string" && /^https?:\/\//i.test(u);
+
+  function alternativesBlock(alternatives) {
+    const items = (alternatives || []).filter((a) => a && a.name && httpUrl(a.url)).slice(0, 2);
+    if (!items.length) return "";
+    return el("div", { class: "alts" }, [
+      el("p", { class: "alts-label", id: "sl-alts-label", text: "Try instead" }),
+      el("ul", { "aria-labelledby": "sl-alts-label" }, items.map((a) => {
+        const search = a.link_kind === "search";
+        const store = a.store || (() => { try { return new URL(a.url).hostname.replace(/^www\./, ""); } catch { return ""; } })();
+        const name = search ? `Search ${store} for ${a.name.charAt(0).toLowerCase()}${a.name.slice(1)}` : a.name;
+        const meta = search ? "" : [money(a.price), store].filter(Boolean).join(" · ");
+        return el("li", {}, [el("a", {
+          class: `alt-link${search ? " search" : ""}`, href: a.url, target: "_blank", rel: "noopener noreferrer",
+          "data-link-kind": search ? "search" : "product",
+          title: name,
+          "aria-label": `${name}${meta ? `, ${meta}` : ""} (opens in a new tab)`,
+        }, [
+          el("span", { class: "alt-icon", html: search ? ICONS.search : ICONS.external }),
+          el("span", { class: "alt-text" }, [
+            el("span", { class: "alt-name", text: name }),
+            meta ? el("span", { class: "alt-meta", text: meta }) : "",
+          ]),
+        ])]);
+      })),
+    ]);
+  }
+
   function showChecking(item) {
     const b = frame("checking");
     if (item?.name) b.append(itemRow(item));
@@ -156,12 +189,11 @@
     const up = el("button", { class: "btn thumb", "aria-label": "Thumbs up", "aria-pressed": "false", html: ICONS.up });
     const down = el("button", { class: "btn thumb", "aria-label": "Thumbs down", "aria-pressed": "false", html: ICONS.down });
 
-    const alt = result.alternatives?.[0];
     b.append(
       itemRow(item),
       el("span", { class: `badge ${result.verdict}`, text: LABELS[result.verdict] || result.verdict }),
       el("p", { class: "reason", text: result.reason }),
-      alt ? el("p", { class: "alt" }, [el("b", { text: "Try instead: " }), `${alt.name}${alt.price != null ? ` (${money(alt.price)})` : ""}`]) : "",
+      alternativesBlock(result.alternatives),
       el("div", { class: "row" }, [skip, buy, up, down]),
       status,
     );

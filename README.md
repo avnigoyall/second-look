@@ -149,13 +149,24 @@ python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-<time>.js
 - If call (a) returns no cited sources, the script prints a warning, adds nothing, and exits with code 2.
 - Agent trends have `search_suggestions_html: null`. Show their `sources` links instead.
 
+**3. Alternative links.** Every alternative the card shows is one link that opens in a new tab. Links are found offline, never at verdict time:
+
+- `seed_trends.py` and the trend agent (step c) make one Claude web search call per trend (`backend/alternative_finder.py`, restricted to basics retailers listed in `backend/alternatives.py`) to find 1 or 2 basic product pages. About $0.01 to $0.03 per trend.
+- A product URL is used only if it came back in a web search result block. The model's own text is never trusted for a URL. The URL is then checked over HTTP with a browser User-Agent: status 200, same registrable domain after redirects, and no redirect to a home, search, or error page. A 403 or 429 from bot protection keeps the link with `verified_at: null`.
+- Price comes from the product page when it loads, else only from text Claude cited from that page. The name comes from the page title or the search result title.
+- If no product link survives, the alternative gets a store search link (`link_kind: "search"`, for example "Search Gap for straight-leg jeans").
+- `seed_trends.py` flags: `--dry-run` (find links, write nothing), `--no-links` (search links only, no cost), `--refresh-links` (search again; otherwise stored links are reused). The agent has `--no-links`.
+- `python scripts/verify_alternative_links.py` re-checks every stored link and lists dead ones. It is read-only; `--write` only updates `verified_at`.
+- `backend.alternatives.alternatives_for_trend(trend)` maps a trend's alternatives into the verdict `Alternative` shape (`name, url, price, reason, store, link_kind`). `url` is always set. `/dashboard` gives older verdicts with a null url a search link when it reads them.
+- `extension/tests/harness/card.html` renders the real card with sample alternatives, without the extension or a backend (serve `extension/` with `python3 -m http.server`).
+
 **Reading trends.** `GET /trends` (JWT) returns every trend without `example_images`; each trend has `example_image_count` instead. `backend.trends.get_trends_for_prompt()` returns a compact list for the verdict prompt: `name`, `category`, `features`, `lifespan_bucket`, `lifespan_label`, and `source_titles`.
 
 ## Tests
 
 ```bash
 node extension/tests/price.test.js       # price parser unit tests
-python -m unittest discover tests        # trend guards and seed rules, offline
+python -m unittest discover tests        # trend guards, seed rules, alternative links, offline
 ```
 
 ### Extension E2E test

@@ -115,8 +115,31 @@
     .badge.micro_trend { --c: var(--trend); }
     .badge.good_buy { --c: var(--good); }
     .reason { margin-bottom: 12px; }
-    .alt { margin-bottom: 12px; padding: 10px 12px; border-radius: 10px; background: var(--soft); font-size: 13px; }
-    .alt b { font-weight: 600; }
+    /* alternatives: each row is one link that opens in a new tab */
+    .alts { margin-bottom: 12px; }
+    .alts-label { margin-bottom: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+    .alts ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+    a.alt-link {
+      display: flex; gap: 10px; align-items: center; min-height: 44px; box-sizing: border-box;
+      padding: 8px 12px 8px 10px; border-radius: 10px; background: var(--soft); color: var(--ink);
+      text-decoration: none; -webkit-tap-highlight-color: transparent;
+      transition-property: background-color, scale; transition-duration: 150ms; transition-timing-function: ease-out;
+    }
+    .alt-icon { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 8px;
+                background: var(--bg); color: var(--accent); }
+    .alt-icon svg { width: 16px; height: 16px; }
+    .alt-text { display: grid; min-width: 0; }
+    .alt-name { font-size: 13px; font-weight: 600; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .alt-link.search .alt-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .alt-meta { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    a.alt-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    @media (hover: hover) {
+      a.alt-link:hover { background: color-mix(in oklch, var(--soft), var(--ink) 6%); }
+      a.alt-link:hover .alt-name { text-decoration: underline; text-underline-offset: 2px; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      a.alt-link:active { scale: 0.96; }
+    }
     .row { display: flex; gap: 8px; align-items: center; }
     .row .primary, .row .secondary { flex: 1; }
     .status { margin-top: 10px; font-size: 12px; color: var(--muted); }
