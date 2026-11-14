@@ -1,0 +1,7 @@
+{
+  "category": ["tee", "shirt", "sweater", "hoodie", "jacket", "coat", "jeans", "pants", "shorts", "skirt", "dress", "shoes", "bag", "accessory"],
+  "color_family": ["black", "white", "gray", "beige", "brown", "red", "orange", "yellow", "green", "blue", "purple", "pink", "multi"],
+  "fabric": ["cotton", "denim", "wool", "polyester", "nylon", "linen", "leather", "blend", "unknown"],
+  "cut": ["cropped", "fitted", "regular", "relaxed", "oversized", "wide", "straight", "slim"],
+  "style": ["basic", "streetwear", "preppy", "athleisure", "y2k", "minimalist", "boho", "formal", "other"]
+}

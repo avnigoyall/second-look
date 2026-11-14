@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Second Look</title>
+<link rel="stylesheet" href="src/popup/popup.css">
+</head>
+<body>
+  <header><span class="brand">Second Look</span></header>
+
+  <form id="login-view" hidden>
+    <label>Email <input id="email" type="email" autocomplete="username" required></label>
+    <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+    <button type="submit" class="primary">Log in</button>
+  </form>
+
+  <section id="main-view" hidden>
+    <p id="who"></p>
+    <button id="send-test" class="primary">Send test item</button>
+    <button id="logout" class="ghost">Log out</button>
+  </section>
+
+  <p id="status" class="status" role="status"></p>
+
+  <script src="src/popup/popup.js"></script>
+</body>
+</html>
