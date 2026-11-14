@@ -6,7 +6,7 @@ Built so far:
 
 - **Part 0: Foundation.** API, database, auth, extension messaging, and dashboard. Verdicts are still stubs with canned data.
 - **Part 1: Capture.** The extension reads the product a shopper adds to their cart, shows the verdict card on the page, tracks the items checked in this session, and notices when one is removed from the cart.
-- **Part 4: Trends.** Curated seed trends plus a Gemini agent that adds sourced trends. `GET /trends` and `get_trends_for_prompt()` expose them for the verdict prompt.
+- **Part 4: Trends.** Curated seed trends plus an agent (Claude web search, then Gemini structuring) that adds sourced trends. `GET /trends` and `get_trends_for_prompt()` expose them for the verdict prompt.
 
 Not built yet: real verdict logic, closet matching, trend matching, Nessie, and the cart summary UI.
 
@@ -44,7 +44,7 @@ cp .env.example .env        # then fill in the values
 | `NESSIE_API_KEY` | Capital One Nessie (later parts) |
 | `CLAUDE_MODEL` | Model id for the Claude key check. Use a small, cheap model, for example `claude-haiku-5-5` |
 | `GEMINI_MODEL` | Model id for `/read-page` and the Gemini key checks. Use a fast model, for example `gemini-3.5-flash-lite` (see Assumptions) |
-| `TREND_AGENT_MODEL` | Optional. Model id for `run_trend_agent.py`. Default `gemini-3.5-flash` |
+| `TREND_AGENT_MODEL` | Optional. Gemini model id for the structuring call in `run_trend_agent.py`. Default `gemini-3.5-flash`. The search call uses `CLAUDE_MODEL` |
 
 ## Run
 
@@ -134,10 +134,11 @@ python scripts/run_trend_agent.py --dry-run               # print what would be 
 python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-<time>.json   # reuse a saved search
 ```
 
-- **Call (a), grounded:** Gemini with the Google Search tool writes a research report. The script keeps the text, each grounding chunk's title and URL, which sentences each chunk supports, and the `searchEntryPoint` HTML, and saves them to `.trend_runs/` (git-ignored).
+- **Call (a), web search:** Claude (`CLAUDE_MODEL`) with the server-side web search tool (`web_search_20260318`, at most 5 searches) writes a cited research report. The script keeps the text, every cited source's title and URL, and which sentences cite which source, prints the source list, and saves it all to `.trend_runs/` (git-ignored).
 - **Call (b), structuring:** Gemini with no tools turns the report into trend documents. The report is marked with source ids (`[S3]`) and the model cites ids only. The code maps ids back to URLs, so a URL cannot be invented.
 - **Guards in code:** a trend with no source from call (a) is discarded. Names are deduped case-insensitively against existing trends and within the run (a unique case-insensitive index backs this up). A lifespan number without a cited source is dropped to null. An alternative's link is kept only if it is one of the call (a) sources. At most 5 new trends per run.
-- If call (a) returns no grounding chunks, the script prints a warning, adds nothing, and exits with code 2.
+- If call (a) returns no cited sources, the script prints a warning, adds nothing, and exits with code 2.
+- Agent trends have `search_suggestions_html: null`. Show their `sources` links instead.
 
 **Reading trends.** `GET /trends` (JWT) returns every trend without `example_images`; each trend has `example_image_count` instead. `backend.trends.get_trends_for_prompt()` returns a compact list for the verdict prompt: `name`, `category`, `features`, `lifespan_label`, and `source_titles`.
 
@@ -202,15 +203,16 @@ Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension
 
 ### Part 4 assumptions
 
-- **Grounding quota:** on the current `GEMINI_API_KEY`, every Google Search grounded call returns `429 RESOURCE_EXHAUSTED` (on `gemini-3.5-flash` and `gemini-3.5-flash-lite`), while plain calls work. The agent stops with a message that says so. Grounding needs billing enabled on the key's project, or another key.
-- **Agent model:** `gemini-3.5-flash` by default, not the `GEMINI_MODEL` used by `/read-page`. The agent runs offline, so quality matters more than speed. Override with `--model` or `TREND_AGENT_MODEL`.
+- **Search provider:** call (a) uses Claude web search, not Gemini Google Search grounding. Both Gemini keys tried returned `429 RESOURCE_EXHAUSTED` on every grounded call while plain calls worked. Call (b) still uses Gemini.
+- **Web search tool:** `web_search_20260318` (the newest version in the Anthropic docs, Nov 2026) with `allowed_callers: ["direct"]`, so Claude calls search itself and every result and citation comes back as a plain content block. Web search costs $10 per 1,000 searches plus tokens; one run makes at most 5. If an org admin has turned web search off, the API returns a 400 and the script stops with a message saying so.
+- **Sources:** the S-id list is the set of URLs Claude cited in its report, in order of first citation. Search results that Claude read but did not cite are counted, not listed.
+- **Agent models:** call (a) uses `CLAUDE_MODEL` (`claude-haiku-5-5` in `.env`). Call (b) uses `gemini-3.5-flash` by default, not the `GEMINI_MODEL` used by `/read-page`, because the agent runs offline and quality matters more than speed. Override it with `--model` or `TREND_AGENT_MODEL`.
 - **Lifespan rule:** a trend stores `lifespan_source_url` next to `lifespan_weeks_est`. A number is allowed only when that URL is one of the trend's sources. The seed script rejects a number without it. The agent drops an uncited number to null and keeps the label.
-- **Source URLs:** grounding chunk URLs are Google redirect links that expire. The agent stores the page each one points to (read from the redirect's `Location` header). If that lookup fails, it stores the redirect link.
-- **Source titles** for agent trends are the titles Google returns for each chunk. These are often a site name such as `vogue.com`, not the article headline.
+- **Source titles** for agent trends are the page titles from Claude's citations.
 - **Features and category:** the agent uses only values from `backend/config/attributes.json` (color uses `color_family`), so Part 5 can match them to item attributes. Seed trends may use other words; the seed script prints a note for each one but loads it.
 - **first_seen:** for seed trends, the date in the file, or the date first loaded if the file has none. For agent trends, the date of the run that found the trend.
-- **search_suggestions_html:** one `searchEntryPoint` HTML per agent run, stored on every trend from that run. Google requires showing it wherever grounded results are displayed. Seed trends never have it.
-- **Example images:** the agent adds none, because grounding returns no image URLs.
+- **search_suggestions_html:** null for agent trends from Claude web search, and never set on seed trends. The field stays in the model in case Gemini grounding is used again.
+- **Example images:** the agent adds none, because web search returns no image URLs.
 - **Seed overrides agent:** if a seed trend has the same name as an agent trend, the seed run replaces it, sets `origin: "seed"`, and removes `search_suggestions_html`.
 - **Part 0 placeholder trends:** `seed/seed.py` no longer creates the three `PLACEHOLDER trend` documents. `seed_trends.py` deletes them if they exist, so they never reach the verdict prompt.
 - **Trend model:** `sources` is now `[{title, url}]`, `alternatives` is `[{type, why_it_lasts, where_to_look, url}]`, and `lifespan_weeks_est` is a number that may have decimals. The `/analyze` stub's `matched_trend` uses this shape.

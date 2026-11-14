@@ -1,4 +1,4 @@
-"""Trend agent: finds current apparel micro-trends with Gemini + Google Search and adds them to the trends collection.
+"""Trend agent: finds current apparel micro-trends with Claude web search and adds them to the trends collection.
 
 Run from the project root:
     python scripts/run_trend_agent.py                      # default Gen Z and college queries
@@ -6,10 +6,11 @@ Run from the project root:
     python scripts/run_trend_agent.py --dry-run            # show what would be added, write nothing
     python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-....json   # reuse a saved search
 
-Two Gemini calls:
-  (a) grounded: Google Search tool on. Keeps the reply text, the grounding chunk URLs and titles,
-      which sentences each chunk supports, and the searchEntryPoint HTML. Saved to .trend_runs/.
-  (b) structuring: no tools. Turns the text from (a) into trend documents. It can cite only the
+Two calls:
+  (a) search: Claude (CLAUDE_MODEL) with the server-side web search tool (at most 5 searches). Keeps
+      the report text, the sources Claude cited (url and title), and which sentences cite which
+      source. Saved to .trend_runs/.
+  (b) structuring: Gemini, no tools. Turns the text from (a) into trend documents. It can cite only the
       numbered sources from (a), by id. The code maps ids back to URLs, so no URL can be invented.
 
 Guards in code (not left to the model): a trend needs at least one source from (a), names are
@@ -28,7 +29,7 @@ from urllib.parse import urlparse
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import httpx  # noqa: E402
+import anthropic  # noqa: E402
 from google import genai  # noqa: E402
 from google.genai import errors as genai_errors  # noqa: E402
 from google.genai import types  # noqa: E402
@@ -41,7 +42,13 @@ from backend.trends import TrendDoc, name_key  # noqa: E402
 MAX_NEW_PER_RUN = 5
 RUNS_DIR = ROOT / ".trend_runs"
 CALL_TIMEOUT_MS = 180_000
-REDIRECT_HOST = "vertexaisearch.cloud.google.com"
+SEARCH_TIMEOUT_S = 300
+MAX_SEARCHES = 5
+MAX_PAUSE_RESUMES = 3
+# Newest web search version (checked against the Anthropic docs, Nov 2026). allowed_callers "direct"
+# makes Claude call search itself, so every result and citation comes back as a plain content block.
+WEB_SEARCH_TOOL = {"type": "web_search_20260318", "name": "web_search", "max_uses": MAX_SEARCHES,
+                   "allowed_callers": ["direct"]}
 
 DEFAULT_QUERIES = [
     "Gen Z fashion micro-trends right now",
@@ -55,7 +62,7 @@ college students in the US, so a shopping assistant can warn people before they 
 will fade. Search the web for these focus topics:
 {queries}
 
-Write a factual research report on 5 to 10 specific, currently popular apparel micro-trends (clothing,
+Write a factual research report, citing your sources, on 5 to 10 specific, currently popular apparel micro-trends (clothing,
 shoes, or bags; not makeup, hair, or nails). For each trend give:
 - its common name and what the piece looks like: garment type, cut or silhouette, color, fabric
 - when and where it took off (platform, celebrity, or brand), with dates if a source gives them
@@ -133,32 +140,9 @@ def gemini_client() -> genai.Client:
     return genai.Client(api_key=key, http_options=types.HttpOptions(timeout=CALL_TIMEOUT_MS))
 
 
-def explain_api_error(e: genai_errors.APIError, step: str) -> SystemExit:
-    if e.code == 429 and step == "grounded":
-        return SystemExit(
-            "Grounded call failed: 429 RESOURCE_EXHAUSTED. Plain Gemini calls can still work on this key, "
-            "but Google Search grounding has no quota on it. Enable billing on the key's AI Studio / Google "
-            "Cloud project, or use a key that has grounding quota, then run again.")
-    return SystemExit(f"{step} call failed: HTTP {e.code} {e.status}: {str(e.message)[:300]}")
-
-
-def resolve_url(client: httpx.Client, uri: str) -> str:
-    """Grounding chunk URIs are Google redirect links that expire. Store the page they point to."""
-    if urlparse(uri).hostname != REDIRECT_HOST:
-        return uri
-    try:
-        r = client.get(uri, follow_redirects=False)
-        location = r.headers.get("location")
-        if r.is_redirect and location and location.startswith("http"):
-            return location
-    except httpx.HTTPError:
-        pass
-    return uri
-
-
 def annotate(text: str, supports: list[dict]) -> str:
-    """Insert [S1] style markers after each sentence that a grounding chunk supports.
-    Gemini segment end indices are byte offsets into the UTF-8 text."""
+    """Insert [S1] style markers after each passage that cites a source.
+    end_index values are byte offsets into the UTF-8 text."""
     raw = text.encode("utf-8")
     inserts = {}
     for s in supports:
@@ -173,38 +157,76 @@ def annotate(text: str, supports: list[dict]) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-# ---------- call (a): grounded search ----------
+# ---------- call (a): Claude web search ----------
 
-def grounded_call(client: genai.Client, model: str, queries: list[str]) -> dict:
+def search_call(queries: list[str]) -> dict:
+    model = os.getenv("CLAUDE_MODEL")
+    if not os.getenv("ANTHROPIC_API_KEY") or not model:
+        raise SystemExit("ANTHROPIC_API_KEY and CLAUDE_MODEL must be set in .env for the search call.")
     today = datetime.now(timezone.utc).date().isoformat()
     prompt = GROUNDED_PROMPT.format(today=today, queries="\n".join(f"- {q}" for q in queries))
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], timeout=SEARCH_TIMEOUT_S)
+    messages = [{"role": "user", "content": prompt}]
+    content = []
     try:
-        response = client.models.generate_content(
-            model=model, contents=prompt,
-            config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]))
-    except genai_errors.APIError as e:
-        raise explain_api_error(e, "grounded")
+        for _ in range(MAX_PAUSE_RESUMES + 1):
+            response = client.messages.create(model=model, max_tokens=16000, messages=messages,
+                                              tools=[WEB_SEARCH_TOOL])
+            content += response.content
+            if response.stop_reason != "pause_turn":
+                break
+            # Resume a paused server-side search turn: send the paused assistant message back unchanged.
+            messages = [messages[0], {"role": "assistant", "content": content}]
+    except anthropic.BadRequestError as e:
+        if "web search" in str(e.message).lower() or "web_search" in str(e.message).lower():
+            raise SystemExit(
+                f"Search call failed: web search is not available for this API key ({e.message}). "
+                "An org admin may need to enable it in the Anthropic Console under Settings > Capabilities.")
+        raise SystemExit(f"Search call failed: HTTP 400: {e.message}")
+    except anthropic.APIStatusError as e:
+        raise SystemExit(f"Search call failed: HTTP {e.status_code}: {e.message}")
+    except anthropic.APIConnectionError as e:
+        raise SystemExit(f"Search call failed: could not reach the Anthropic API ({type(e).__name__})")
+    if response.stop_reason == "refusal":
+        raise SystemExit("Search call failed: Claude declined the request (stop_reason refusal).")
+    return {"created_at": datetime.now(timezone.utc).isoformat(), "provider": "claude", "model": model,
+            "queries": queries, **parse_search_content(content)}
 
-    candidate = response.candidates[0] if response.candidates else None
-    gm = candidate.grounding_metadata if candidate else None
-    chunks = [{"title": (c.web.title or c.web.domain or "").strip(), "uri": c.web.uri, "domain": c.web.domain}
-              for c in (gm.grounding_chunks or [] if gm else []) if c.web and c.web.uri]
-    supports = [{"end_index": s.segment.end_index, "chunk_indices": list(s.grounding_chunk_indices or [])}
-                for s in (gm.grounding_supports or [] if gm else []) if s.segment]
-    with httpx.Client(timeout=10) as http:
-        for c in chunks:
-            c["url"] = resolve_url(http, c["uri"])
-    return {
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "model": model,
-        "queries": queries,
-        "text": response.text or "",
-        "web_search_queries": list(gm.web_search_queries or []) if gm else [],
-        "chunks": chunks,
-        "supports": supports,
-        "search_entry_point_html": (gm.search_entry_point.rendered_content
-                                    if gm and gm.search_entry_point else None),
-    }
+
+def parse_search_content(content) -> dict:
+    """Turn Claude's content blocks into the run format call (b) reads.
+
+    chunks: one entry per cited URL, in order of first citation (these become S1, S2, ...).
+    supports: byte offset of the end of each cited text block plus the chunks it cites, so annotate()
+    can put [S1] markers after the claims. Also counts every search result and search error."""
+    text, chunks, supports, queries, errors = "", [], [], [], []
+    result_count, index_of = 0, {}
+    for block in content:
+        if block.type == "server_tool_use" and block.name == "web_search":
+            query = (block.input or {}).get("query")
+            if query:
+                queries.append(query)
+        elif block.type == "web_search_tool_result":
+            if isinstance(block.content, list):
+                result_count += len(block.content)
+            else:
+                errors.append(block.content.error_code)
+        elif block.type == "text":
+            text += block.text
+            cited = []
+            for c in block.citations or []:
+                if c.type != "web_search_result_location" or not c.url:
+                    continue
+                if c.url not in index_of:
+                    index_of[c.url] = len(chunks)
+                    chunks.append({"title": (c.title or urlparse(c.url).hostname or c.url).strip(),
+                                   "url": c.url, "domain": urlparse(c.url).hostname})
+                if index_of[c.url] not in cited:
+                    cited.append(index_of[c.url])
+            if cited:
+                supports.append({"end_index": len(text.encode("utf-8")), "chunk_indices": cited})
+    return {"text": text, "web_search_queries": queries, "search_result_count": result_count,
+            "search_errors": errors, "chunks": chunks, "supports": supports, "search_entry_point_html": None}
 
 
 def save_run(run: dict) -> Path:
@@ -227,7 +249,7 @@ def structuring_call(client: genai.Client, model: str, run: dict, limit: int) ->
     try:
         response = client.models.generate_content(model=model, contents=prompt, config=config)
     except genai_errors.APIError as e:
-        raise explain_api_error(e, "structuring")
+        raise SystemExit(f"Structuring call failed: HTTP {e.code} {e.status}: {str(e.message)[:300]}")
     try:
         parsed = response.parsed if isinstance(response.parsed, StructuredOutput) \
             else StructuredOutput.model_validate_json(response.text or "")
@@ -259,7 +281,7 @@ def apply_guards(structured: list[StructuredTrend], run: dict, existing_keys: se
             if s and s["url"] not in {x["url"] for x in sources}:
                 sources.append(s)
         if not sources:
-            notes.append(f"discarded '{t.name}': no source from the grounded search")
+            notes.append(f"discarded '{t.name}': no source from the web search")
             continue
         key = name_key(t.name)
         if key in seen:
@@ -291,7 +313,7 @@ def apply_guards(structured: list[StructuredTrend], run: dict, existing_keys: se
                 first_seen=first_seen, lifespan_weeks_est=lifespan, lifespan_label=t.lifespan_label,
                 lifespan_source_url=lifespan_url, sources=sources, example_images=[],
                 alternatives=alternatives, origin="agent",
-                search_suggestions_html=run["search_entry_point_html"])
+                search_suggestions_html=run.get("search_entry_point_html"))
         except ValidationError as e:
             notes.append(f"discarded '{t.name}': {e.errors()[0]['msg']}")
             continue
@@ -323,7 +345,8 @@ def main():
     parser.add_argument("--max-new", type=int, default=MAX_NEW_PER_RUN,
                         help=f"new trends to add this run, at most {MAX_NEW_PER_RUN}")
     parser.add_argument("--model", default=os.getenv("TREND_AGENT_MODEL") or "gemini-3.5-flash",
-                        help="Gemini model for both calls (env TREND_AGENT_MODEL, default gemini-3.5-flash)")
+                        help="Gemini model for the structuring call (env TREND_AGENT_MODEL, default "
+                             "gemini-3.5-flash). The search call uses CLAUDE_MODEL")
     parser.add_argument("--dry-run", action="store_true", help="print the trends, write nothing to the database")
     parser.add_argument("--from-grounded", type=Path,
                         help="reuse a saved call (a) result from .trend_runs/ instead of searching again")
@@ -333,26 +356,27 @@ def main():
 
     if args.from_grounded:
         run = json.loads(args.from_grounded.read_text())
-        log(f"Using saved grounded result {args.from_grounded}")
+        log(f"Using saved search result {args.from_grounded}")
     else:
         queries = args.queries or DEFAULT_QUERIES
-        log(f"(a) Grounded search with {args.model}:")
+        log(f"(a) Web search with {os.getenv('CLAUDE_MODEL')} (at most {MAX_SEARCHES} searches):")
         for q in queries:
             log(f"    - {q}")
-        run = grounded_call(client, args.model, queries)
+        run = search_call(queries)
         log(f"    saved to {save_run(run).relative_to(ROOT)}")
-    log(f"    {len(run['chunks'])} grounding chunks, {len(run['supports'])} supported segments, "
-        f"searchEntryPoint {'present' if run['search_entry_point_html'] else 'MISSING'}")
-    if run["web_search_queries"]:
-        log(f"    Google searches run: {'; '.join(run['web_search_queries'])}")
+    if run.get("web_search_queries"):
+        log(f"    searches run: {'; '.join(run['web_search_queries'])}")
+    log(f"    {run.get('search_result_count', 0)} search results, {len(run['chunks'])} cited sources, "
+        f"{len(run['supports'])} cited passages")
+    if run.get("search_errors"):
+        log(f"    search errors: {', '.join(run['search_errors'])}")
+    for i, c in enumerate(run["chunks"]):
+        log(f"    S{i + 1}: {c['title']} - {c['url']}")
 
     if not run["chunks"]:
-        log("\nWARNING: the grounded call returned no grounding chunks, so there are no sources to cite.")
-        log("Every trend would be discarded by the source guard. Nothing was added. Try other queries or a")
-        log("different model with --model.")
+        log("\nWARNING: the web search call returned no cited sources, so there is nothing to cite.")
+        log("Every trend would be discarded by the source guard. Nothing was added. Try other queries.")
         raise SystemExit(2)
-    if not run["search_entry_point_html"]:
-        log("WARNING: no searchEntryPoint HTML in the reply. Trends will be stored without search suggestions.")
 
     from backend.db import ensure_indexes, trends  # imported late so --help works without a database
     ensure_indexes()

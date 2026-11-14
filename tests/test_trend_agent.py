@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from pydantic import ValidationError  # noqa: E402
 
 from backend.trends import TrendDoc, name_key  # noqa: E402
+from types import SimpleNamespace as NS  # noqa: E402
+
 from scripts.run_trend_agent import (MAX_NEW_PER_RUN, StructuredAlternative, StructuredTrend,  # noqa: E402
-                                     annotate, apply_guards)
+                                     annotate, apply_guards, parse_search_content)
 
 RUN = {
     "chunks": [{"title": f"Source {i}", "url": f"https://example.com/{i}"} for i in range(1, 4)],
@@ -74,6 +76,33 @@ class AnnotateTests(unittest.TestCase):
         out = annotate(text, [{"end_index": len("Café cardigans.".encode()), "chunk_indices": [0, 2]},
                               {"end_index": len(text.encode()), "chunk_indices": [1]}])
         self.assertEqual(out, "Café cardigans. [S1][S3] Jeans. [S2]")
+
+
+class SearchParseTests(unittest.TestCase):
+    def cite(self, url, title):
+        return NS(type="web_search_result_location", url=url, title=title)
+
+    def test_cited_sources_become_s_ids_with_markers(self):
+        content = [
+            NS(type="text", text="Let me search.", citations=None),
+            NS(type="server_tool_use", name="web_search", input={"query": "gen z trends"}),
+            NS(type="web_search_tool_result", content=[NS(url="https://a.com"), NS(url="https://b.com"), NS(url="https://c.com")]),
+            NS(type="web_search_tool_result", content=NS(error_code="max_uses_exceeded")),
+            NS(type="text", text=" Café cardigans are big.", citations=[self.cite("https://a.com", "A"), self.cite("https://a.com", "A")]),
+            NS(type="text", text=" Jeans too.", citations=[self.cite("https://b.com", "B"), self.cite("https://a.com", "A")]),
+        ]
+        run = parse_search_content(content)
+        self.assertEqual([c["url"] for c in run["chunks"]], ["https://a.com", "https://b.com"])
+        self.assertEqual(run["search_result_count"], 3)
+        self.assertEqual(run["search_errors"], ["max_uses_exceeded"])
+        self.assertEqual(run["web_search_queries"], ["gen z trends"])
+        self.assertIsNone(run["search_entry_point_html"])
+        self.assertEqual(annotate(run["text"], run["supports"]),
+                         "Let me search. Café cardigans are big. [S1] Jeans too. [S2][S1]")
+
+    def test_agent_trends_from_claude_have_no_search_html(self):
+        run = {**RUN, "search_entry_point_html": None}
+        self.assertIsNone(apply_guards([trend("A")], run, set(), 5)[0][0].search_suggestions_html)
 
 
 class SeedRuleTests(unittest.TestCase):
