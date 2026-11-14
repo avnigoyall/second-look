@@ -1,13 +1,14 @@
 {
-  "_instructions": "Replace the entries in 'trends' with the curated seed trends. Load with: python scripts/seed_trends.py. Entries with \"_placeholder\": true are skipped. Keys starting with '_' are ignored. Every trend needs at least one source. Set lifespan_weeks_est only when lifespan_source_url is one of the trend's source urls; otherwise leave it null and put the evidence in lifespan_label. features and category work best with values from backend/config/attributes.json (cut, color_family, fabric, category). first_seen is an ISO date (YYYY-MM-DD) or null. example_images are image URLs or data URLs. alternatives[].url only when a source gave that link.",
+  "_instructions": "Replace the entries in 'trends' with the curated seed trends. Load with: python scripts/seed_trends.py. Entries with \"_placeholder\": true are skipped. Keys starting with '_' are ignored. Every trend needs at least one source. Set lifespan_weeks_est or lifespan_bucket only when lifespan_source_url is one of the trend's source urls; otherwise leave them null and put the evidence in lifespan_label. features and category work best with values from backend/config/attributes.json (cut, color_family, fabric, category). first_seen is an ISO date (YYYY-MM-DD) or null. example_images are image URLs or data URLs. alternatives[].url only when a source gave that link.",
   "_template": {
     "name": "string, unique (case-insensitive)",
     "category": "tee | shirt | sweater | hoodie | jacket | coat | jeans | pants | shorts | skirt | dress | shoes | bag | accessory",
     "features": {"cut": "string or null", "color": "string or null", "fabric": "string or null"},
     "first_seen": "YYYY-MM-DD or null",
     "lifespan_weeks_est": "number or null",
+    "lifespan_bucket": "short (up to 16 weeks) | medium (up to 52) | long | null. Filled from lifespan_weeks_est when that is set",
     "lifespan_label": "string, required",
-    "lifespan_source_url": "url from sources when lifespan_weeks_est is a number, else null",
+    "lifespan_source_url": "url from sources when lifespan_weeks_est or lifespan_bucket is set, else null",
     "sources": [{"title": "string", "url": "https://..."}],
     "example_images": ["https://... or data:image/..."],
     "alternatives": [{"type": "string", "why_it_lasts": "string", "where_to_look": "string", "url": "null or a url from sources"}]
@@ -20,6 +21,7 @@
       "features": {"cut": "wide", "color": "blue", "fabric": "denim"},
       "first_seen": "2025-03-01",
       "lifespan_weeks_est": 20,
+      "lifespan_bucket": "medium",
       "lifespan_label": "About 20 weeks at peak, per the example source",
       "lifespan_source_url": "https://example.com/barrel-jeans-article",
       "sources": [{"title": "Example article about barrel jeans", "url": "https://example.com/barrel-jeans-article"}],

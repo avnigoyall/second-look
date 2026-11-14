@@ -1,12 +1,13 @@
 """Trend documents: validation shared by the seed script and the trend agent, plus read helpers.
 
 A trend document in the `trends` collection:
-    name, category, features {cut, color, fabric}, first_seen, lifespan_weeks_est, lifespan_label,
-    lifespan_source_url, sources [{title, url}], example_images, alternatives, origin,
+    name, category, features {cut, color, fabric}, first_seen, lifespan_weeks_est, lifespan_bucket,
+    lifespan_label, lifespan_source_url, sources [{title, url}], example_images, alternatives, origin,
     search_suggestions_html (agent trends only)
 
-Rule: lifespan_weeks_est may be a number only when lifespan_source_url names one of the trend's
-sources. Otherwise it is null and lifespan_label carries the evidence in words.
+Rule: lifespan_weeks_est and lifespan_bucket may be set only when lifespan_source_url names one of the
+trend's sources. Otherwise they are null and lifespan_label carries the evidence in words. When both
+are set, the bucket must match the weeks (see bucket_for_weeks).
 """
 import re
 from datetime import datetime
@@ -19,6 +20,21 @@ from backend.settings import ATTRIBUTES
 
 # Case-insensitive comparison for trend names: the unique index and every upsert use it.
 NAME_COLLATION = Collation(locale="en", strength=2)
+
+
+LifespanBucket = Literal["short", "medium", "long"]
+SHORT_MAX_WEEKS = 16   # about one season
+MEDIUM_MAX_WEEKS = 52  # up to a year
+
+
+def bucket_for_weeks(weeks: float) -> str:
+    return "short" if weeks <= SHORT_MAX_WEEKS else "medium" if weeks <= MEDIUM_MAX_WEEKS else "long"
+
+
+def feature_signature(category, features) -> tuple:
+    """Two trends with the same category, cut, color and fabric count as the same trend."""
+    f = features if isinstance(features, dict) else (features.model_dump() if features else {})
+    return (category, f.get("cut"), f.get("color"), f.get("fabric"))
 
 
 def name_key(name: str) -> str:
@@ -61,6 +77,7 @@ class TrendDoc(BaseModel):
     features: TrendFeatures = TrendFeatures()
     first_seen: datetime | None = None
     lifespan_weeks_est: float | None = Field(None, gt=0)
+    lifespan_bucket: LifespanBucket | None = None
     lifespan_label: str = Field(min_length=1)
     lifespan_source_url: str | None = None
     sources: list[TrendSource] = Field(min_length=1)
@@ -77,9 +94,18 @@ class TrendDoc(BaseModel):
     @model_validator(mode="after")
     def check_rules(self):
         source_urls = {s.url for s in self.sources}
-        if self.lifespan_weeks_est is not None and self.lifespan_source_url not in source_urls:
-            raise ValueError("lifespan_weeks_est is set, so lifespan_source_url must be one of the trend's source urls")
-        if self.lifespan_weeks_est is None:
+        if self.lifespan_weeks_est is not None:
+            derived = bucket_for_weeks(self.lifespan_weeks_est)
+            if self.lifespan_bucket is None:
+                self.lifespan_bucket = derived
+            elif self.lifespan_bucket != derived:
+                raise ValueError(f"lifespan_bucket '{self.lifespan_bucket}' does not match "
+                                 f"{self.lifespan_weeks_est:g} weeks (that is '{derived}')")
+        has_lifespan = self.lifespan_weeks_est is not None or self.lifespan_bucket is not None
+        if has_lifespan and self.lifespan_source_url not in source_urls:
+            raise ValueError("lifespan_weeks_est or lifespan_bucket is set, so lifespan_source_url "
+                             "must be one of the trend's source urls")
+        if not has_lifespan:
             self.lifespan_source_url = None
         for alt in self.alternatives:
             if alt.url and alt.url not in source_urls:
@@ -102,14 +128,17 @@ def ensure_trend_indexes(trends):
 
 
 def get_trends_for_prompt() -> list[dict]:
-    """Compact trend list for the verdict prompt (Part 5). No URLs, images, or HTML."""
+    """Compact trend list for the verdict prompt (Part 5): name, category, features, lifespan_bucket,
+    lifespan_label, source_titles. No URLs, images, or HTML."""
     from backend.db import trends
 
-    docs = trends.find({}, {"name": 1, "category": 1, "features": 1, "lifespan_label": 1, "sources.title": 1})
+    docs = trends.find({}, {"name": 1, "category": 1, "features": 1, "lifespan_bucket": 1,
+                            "lifespan_label": 1, "sources.title": 1})
     return [{
         "name": d["name"],
         "category": d.get("category"),
         "features": {k: (d.get("features") or {}).get(k) for k in ("cut", "color", "fabric")},
+        "lifespan_bucket": d.get("lifespan_bucket"),
         "lifespan_label": d.get("lifespan_label"),
         "source_titles": [s["title"] for s in d.get("sources", []) if s.get("title")],
     } for d in docs.sort("name", 1)]

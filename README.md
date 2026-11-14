@@ -136,11 +136,17 @@ python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-<time>.js
 
 - **Call (a), web search:** Claude (`CLAUDE_MODEL`) with the server-side web search tool (`web_search_20260318`, at most 5 searches) writes a cited research report. The script keeps the text, every cited source's title and URL, and which sentences cite which source, prints the source list, and saves it all to `.trend_runs/` (git-ignored).
 - **Call (b), structuring:** Gemini with no tools turns the report into trend documents. The report is marked with source ids (`[S3]`) and the model cites ids only. The code maps ids back to URLs, so a URL cannot be invented.
-- **Guards in code:** a trend with no source from call (a) is discarded. Names are deduped case-insensitively against existing trends and within the run (a unique case-insensitive index backs this up). A lifespan number without a cited source is dropped to null. An alternative's link is kept only if it is one of the call (a) sources. At most 5 new trends per run.
+- **Guards in code:**
+  - A trend needs a `category` from `attributes.json`, so a color or an aesthetic ("cherry red", "quiet luxury") cannot become a trend. Both prompts also say a trend is a specific garment, shoe, bag, or accessory style.
+  - A trend needs at least one source from call (a). Sources older than 12 months are dropped, judged by the search result's `page_age`, or by a `/YYYY/MM/` date in the URL when there is no `page_age`. Sources with no date are kept. A trend whose sources were all dropped is discarded.
+  - `lifespan_weeks_est` and `lifespan_bucket` need a cited, recent source. Both are null when the sources disagree on direction (one says rising or lasting, another says fading). When weeks are set, the bucket is computed from them.
+  - Dedupe against existing trends and within the run: by name (case-insensitive, backed by a unique index), and by the same `category` plus the same `cut`, `color`, and `fabric`. Existing trend names are also passed to the structuring call with an instruction not to repeat them.
+  - Source ids such as "S3" are removed from `lifespan_label`. An alternative's link is kept only if it is a recent source from call (a). At most 5 new trends per run.
+- If the Gemini structuring call gets a 429 or 5xx, it retries after 5 and 20 seconds. If it still fails, the script prints the `--from-grounded` command that retries without searching again.
 - If call (a) returns no cited sources, the script prints a warning, adds nothing, and exits with code 2.
 - Agent trends have `search_suggestions_html: null`. Show their `sources` links instead.
 
-**Reading trends.** `GET /trends` (JWT) returns every trend without `example_images`; each trend has `example_image_count` instead. `backend.trends.get_trends_for_prompt()` returns a compact list for the verdict prompt: `name`, `category`, `features`, `lifespan_label`, and `source_titles`.
+**Reading trends.** `GET /trends` (JWT) returns every trend without `example_images`; each trend has `example_image_count` instead. `backend.trends.get_trends_for_prompt()` returns a compact list for the verdict prompt: `name`, `category`, `features`, `lifespan_bucket`, `lifespan_label`, and `source_titles`.
 
 ## Tests
 
@@ -207,7 +213,11 @@ Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension
 - **Web search tool:** `web_search_20260318` (the newest version in the Anthropic docs, Nov 2026) with `allowed_callers: ["direct"]`, so Claude calls search itself and every result and citation comes back as a plain content block. Web search costs $10 per 1,000 searches plus tokens; one run makes at most 5. If an org admin has turned web search off, the API returns a 400 and the script stops with a message saying so.
 - **Sources:** the S-id list is the set of URLs Claude cited in its report, in order of first citation. Search results that Claude read but did not cite are counted, not listed.
 - **Agent models:** call (a) uses `CLAUDE_MODEL` (`claude-haiku-5-5` in `.env`). Call (b) uses `gemini-3.5-flash` by default, not the `GEMINI_MODEL` used by `/read-page`, because the agent runs offline and quality matters more than speed. Override it with `--model` or `TREND_AGENT_MODEL`.
-- **Lifespan rule:** a trend stores `lifespan_source_url` next to `lifespan_weeks_est`. A number is allowed only when that URL is one of the trend's sources. The seed script rejects a number without it. The agent drops an uncited number to null and keeps the label.
+- **Lifespan rule:** a trend stores `lifespan_source_url` next to `lifespan_weeks_est` and `lifespan_bucket`. Either one may be set only when that URL is one of the trend's sources. The seed script rejects a number or bucket without it. The agent drops an uncited one to null and keeps the label.
+- **lifespan_bucket:** `short` is up to 16 weeks (about one season), `medium` up to 52 weeks, `long` more than a year. When `lifespan_weeks_est` is set, the bucket must match it (the seed script fills it in if it is missing).
+- **Direction conflicts** are judged by the structuring model (`lifespan_direction_conflict`); the code then sets the number and bucket to null.
+- **Feature dedupe** compares exact values, nulls included. Two trends in the same category with no cut, color, or fabric count as duplicates.
+- **Recency:** a source is too old when its date is more than 365 days before the run date. `page_age` text such as "April 30, 2025", "2025-04-30", or "3 weeks ago" is parsed. Text that does not parse counts as no date.
 - **Source titles** for agent trends are the page titles from Claude's citations.
 - **Features and category:** the agent uses only values from `backend/config/attributes.json` (color uses `color_family`), so Part 5 can match them to item attributes. Seed trends may use other words; the seed script prints a note for each one but loads it.
 - **first_seen:** for seed trends, the date in the file, or the date first loaded if the file has none. For agent trends, the date of the run that found the trend.

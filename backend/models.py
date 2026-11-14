@@ -80,6 +80,8 @@ class TrendBase(BaseModel):
     features: TrendFeatures = TrendFeatures()
     first_seen: datetime | None = None
     lifespan_weeks_est: float | None = Field(None, description="Set only when lifespan_source_url cites it")
+    lifespan_bucket: Literal["short", "medium", "long"] | None = Field(
+        None, description="short: up to 16 weeks, medium: up to 52, long: longer. Set only when lifespan_source_url cites it")
     lifespan_label: str | None = None
     lifespan_source_url: str | None = None
     sources: list[TrendSource] = []
