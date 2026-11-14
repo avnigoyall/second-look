@@ -266,6 +266,10 @@ const RECORDER = `(() => {
       const real = chrome.runtime.sendMessage.bind(chrome.runtime);
       chrome.runtime.sendMessage = (msg) => msg?.type === "DIAGNOSE" ? Promise.resolve({ ok: true, data: rep }) : real(msg);
     }, report);
+    // Avni's popup shows the savings summary when the active tab is not a product page (here the popup itself
+    // is the active tab). The user reveals the product tools with "check anyway", as on an undetected store.
+    (await pop2.isVisible("#summary") ? pass : fail)("5. popup shows the savings summary off a product page");
+    if (!(await pop2.isVisible("#diagnose"))) await pop2.click("#check-anyway");
     await pop2.click("#diagnose");
     await pop2.waitForSelector("#diag-output:not(:empty)", { timeout: 20000 });
     const text = await pop2.textContent("#diag-output");

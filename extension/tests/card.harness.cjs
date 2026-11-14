@@ -213,7 +213,8 @@ async function shot(page, name) {
     { tag: "no-transfer", click: "Skip it", action: { data: { ok: true, balances: { checking_cents: null, savings_cents: null, placeholder: true } } }, expect: PENDING },
     { tag: "timeout", click: "Skip it", action: { code: "timeout", error: "Second Look took longer than 15 seconds to answer.", delayMs: 300 }, expect: PENDING },
     { tag: "error", click: "Skip it", action: { code: "offline", error: "Cannot reach the Second Look server. Is it running on localhost:8000?" }, expect: "Cannot reach the Second Look server. Is it running on localhost:8000?", error: true },
-    { tag: "buy", click: "Buy anyway", action: { data: { ok: true, balances } }, expect: "Marked as bought." },
+    // RESPONSES.good is a good_buy verdict, whose buy button reads "Buy it" (Avni's UI refresh).
+    { tag: "buy", click: "Buy it", action: { data: { ok: true, balances } }, expect: "Marked as bought." },
   ];
   for (const v of variants) {
     for (const c of ACTION_CASES) {
@@ -234,6 +235,22 @@ async function shot(page, name) {
       shots.push(await shot(s.page, `action-${c.tag}-${v.tag}`));
       errors.push(...s.page.errors); await s.ctx.close();
     }
+  }
+
+  // Button order and emphasis follow the verdict: good_buy highlights "Buy it", the others highlight "Skip it".
+  for (const [tag, response, first, primary, other] of [
+    ["good_buy", RESPONSES.good, "Buy it", "Buy it", "Skip it anyway"],
+    ["have_this_look", RESPONSES.have, "Skip it", "Skip it", "Buy anyway"],
+  ]) {
+    const s = await open(browser, { width: 1280, scheme: "light", response });
+    await s.card.locator(".badge").waitFor();
+    const names = await s.card.locator(".row .btn:not(.thumb)").evaluateAll((bs) => bs.map((b) => ({ text: b.textContent.trim(), primary: b.classList.contains("primary") })));
+    const focused = await s.card.locator(".btn:focus").textContent().catch(() => "");
+    check(names[0]?.text === first, `buttons ${tag}: "${first}" comes first`, JSON.stringify(names));
+    check(names.find((n) => n.primary)?.text === primary, `buttons ${tag}: "${primary}" is highlighted`, JSON.stringify(names));
+    check(names.some((n) => n.text === other && !n.primary), `buttons ${tag}: "${other}" is secondary`, JSON.stringify(names));
+    check(focused.trim() === primary, `buttons ${tag}: focus on "${primary}"`, focused);
+    errors.push(...s.page.errors); await s.ctx.close();
   }
 
   // a slow /action never blocks the card: it shows Saving... and still closes

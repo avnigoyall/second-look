@@ -242,11 +242,14 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 - Everything starts `pending`. `POST /transactions/{id}/settle` moves `settle_at` to now; the hosted sweep moves money 30 to 60 s later. A pending deposit cannot be spent yet (transfer gets 422 `insufficient_funds`). Errors are problem+json. No idempotency key, so a timed-out create may have landed.
 
 ### Dashboard
-- `GET /dashboard` returns `{money_kept, waste_avoided, verdicts (last 50), cost_per_wear}`. `money_kept` is still the local sum of `item.price` over verdicts with `action == skipped` (now in `backend/services/money.py`). `waste_avoided` and `cost_per_wear` are null for now.
+- `GET /dashboard` returns `{money_kept, waste_avoided, verdicts (last 50), cost_per_wear}`. `money_kept` is still the local sum of `item.price` over verdicts with `action == skipped` (now in `backend/services/money.py`). `waste_avoided` is estimated kg CO2e avoided by skipped items (Avni, `backend/impact.py`), null when no skipped item has a sourced category figure. `cost_per_wear` is null for now.
+- `GET /impact` (JWT, Avni) returns `{money_kept, items_skipped, co2e_kg, co2e_items_counted, co2e_sources: [{category, kg_co2e, source, url}]}`. Figures come only from `backend/config/impact.json`, which holds sourced per-category numbers (for example jeans 33.4 kg, Levi's 501 lifecycle assessment). Categories without a sourced figure are not counted.
 - `GET /cart-summary` is a placeholder (all zero, `placeholder: true`). `GET /dashboard-ui` serves the page.
 - Only Skip it counts toward money kept. Known gaps: money_kept includes skips from before Part 6 (no transfer), so it can differ from Nessie Savings; Skip then Buy anyway does not reverse the transfer; the dashboard page does not show Nessie balances yet; verdict times show UTC as if local (5 hours off in EST).
 
 ### Card after an action (Part 6)
+- Buttons follow the verdict (Avni's UI refresh): good_buy highlights "Buy it" first and focuses it, with "Skip it anyway" second; have_this_look and micro_trend keep "Skip it" first, then "Buy anyway". Both skip buttons send `skipped`, both buy buttons send `bought`.
+- Popup (Avni's UI refresh): hanger logo, dark purple theme. On a product page it shows the check and Diagnose tools; elsewhere it shows the savings summary from `GET /impact`, with "Check this page anyway" to reveal the tools. Signup takes an optional phone.
 - Skip it with `transfer.status == "done"` and an amount: "Skipped. $X moved to savings" with a check. Anything else (pending, failed, no_price, no transfer field, timeout): "Skipped. Savings update pending". On a timeout the buttons stay disabled, since the skip may have landed. Buy anyway: unchanged ("Marked as bought").
 
 ## 10. Feedback (Part 7) `[PROPOSED]`
@@ -257,7 +260,8 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results after the Claude price tier merge: unittest 147/147, price checks 23 plus 18 window checks, extension E2E 65/65 with 2 SKIP.
+- Last known results after merging Avni's popup refresh and phone signup: unittest 147/147, card harness 73/73, extension E2E 66/66 with 2 SKIP.
+- Earlier: after the Claude price tier merge: unittest 147/147, price checks 23 plus 18 window checks, extension E2E 65/65 with 2 SKIP.
 - Earlier: results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 61/61 after the Part 6 merge (60/60 twice after the Photon merge), unittest 133/133, card harness 65/65, with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
 - Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@`, `test_nessie@` (Nessie enabled), `test_nessie_local@secondlook.test`, plus throwaway `e2e<timestamp>@example.com` users.
 - E2E has a SKIP result for checks that need data the shared DB does not have yet. A SKIP is not a pass.
@@ -303,6 +307,9 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 9 | Nessie for every user | Opt-in per user (`nessie_enabled`, set by `setup_nessie_demo.py`), so E2E users never create Nessie objects | Contract (design decision) |
 | 9 | Nessie shapes unknown | Recorded from the live smoke test: integer cents, pending then settled by a sweep, no idempotency key | Contract |
 | 2 | Price tiers end at `/read-page` (first 8000 chars) | New final tier `POST /read-price`: Claude over text windows around every amount and the add-to-cart area, verbatim check in code. Price source `claude` | Contract (additive) |
+| 9 | `waste_avoided` always null; no impact endpoint | Avni: sourced CO2e estimate in `waste_avoided`, new `GET /impact` | Contract (additive) |
+| 14 | Phone only through `/imessage/link` | Avni: optional phone at signup, normalized to E.164, unique (409) | Contract (additive) |
+| 7 | Card buttons always "Skip it" then "Buy anyway" | Avni: good_buy shows "Buy it" first and highlighted, then "Skip it anyway". Card harness and E2E updated | Contract |
 
 ## 13. Open items
 
@@ -320,6 +327,7 @@ Backend additions (for CONTRACT.md)
 
 - `backend/routers/imessage.py`: `POST /imessage/link`, `/imessage/analyze`, `/imessage/own`. Header `X-Agent-Secret`.
 - `users.phone`: optional, unique sparse index.
+- Signup with a phone (Avni, merged Nov 14): `POST /auth/signup` takes optional `phone` (max 40). `backend/phone.py` normalizes it to E.164 (US numbers need an area code; others start with + and the country code). A phone already on another account gives 409; an invalid one gives 422. A phone set at signup links the account to iMessage without `/imessage/link`.
 - Verdict docs from iMessage get `channel: "imessage"` and `ownership: "yes" | "no"` after the answer.
   `item.image_url` is set to null after saving (the photo is kept as `target_crop`).
 - `fetch_image()` also accepts `data:image/...` URLs.
