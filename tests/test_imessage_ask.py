@@ -213,7 +213,7 @@ class CleanTest(unittest.TestCase):
     def test_strips_markdown_and_caps(self):
         self.assertEqual(imessage_ask.clean("**Black jeans** and `tee`\n- one\n# Head"),
                          "Black jeans and tee\none\nHead")
-        self.assertEqual(imessage_ask.clean("Jeans — two pairs"), "Jeans - two pairs")
+        self.assertEqual(imessage_ask.clean("Jeans \u2014 two pairs"), "Jeans - two pairs")
         long = "This is a sentence. " * 60
         out = imessage_ask.clean(long)
         self.assertLessEqual(len(out), imessage_ask.ANSWER_MAX)
