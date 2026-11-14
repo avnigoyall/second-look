@@ -14,6 +14,9 @@ fs.mkdirSync(OUT, { recursive: true });
 const results = [];
 const pass = (name, detail = "") => { results.push(["PASS", name, detail]); console.log("PASS", name, detail); };
 const fail = (name, detail = "") => { results.push(["FAIL", name, detail]); console.log("FAIL", name, detail); };
+// SKIP: the check needs data the shared DB does not have yet (for example a short-lifespan seed trend). Not a pass.
+const skip = (name, detail = "") => { results.push(["SKIP", name, detail]); console.log("SKIP", name, detail); };
+const NEEDS_SHORT_TREND = "needs a short-lifespan seed trend matching the item (micro_trend)";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Records every card state the page shows (states can be very short).
@@ -113,14 +116,20 @@ const RECORDER = `(() => {
     const name = await card(page).locator(".item-name").textContent();
     const meta = await card(page).locator(".item-meta").textContent();
     (name === "Ribbed Cropped Cardigan" && meta.includes("34.90") ? pass : fail)("2a. tier 2 meta read (store suffix stripped, EU price)", `${name} | ${meta}`);
-    // The stub cycles verdicts per user, so this second check is micro_trend: alternatives show, each one a link.
+    // Part 5: alternatives show on micro_trend verdicts only, and each one is a link.
     const badge = await card(page).locator(".badge").textContent();
     const alts = await card(page).locator("a.alt-link").evaluateAll((as) => as.map((a) => ({
       href: a.getAttribute("href"), target: a.target, rel: a.rel, kind: a.dataset.linkKind, text: a.innerText.trim() })));
-    (badge === "Micro trend" && alts.length >= 1 && alts.length <= 2 ? pass : fail)("2a. micro_trend card shows 1 or 2 alternatives", `${badge} | ${alts.length}`);
-    const linkOk = (a) => /^https?:\/\//.test(a.href) && a.target === "_blank" && /noopener/.test(a.rel) && /noreferrer/.test(a.rel) && a.text.length > 0;
-    (alts.length && alts.every(linkOk) ? pass : fail)("2a. every alternative is an http(s) link with target _blank and rel noopener noreferrer", JSON.stringify(alts));
-    (alts.every((a) => a.kind !== "search" || /^Search \S/.test(a.text)) ? pass : fail)("2a. search fallback links read 'Search <store> for <type>'", alts.map((a) => `${a.kind}: ${a.text.replace(/\n/g, " | ")}`).join(" ; "));
+    const altBoxes = await card(page).locator(".alts").count();
+    if (badge === "Micro trend") {
+      (alts.length >= 1 && alts.length <= 2 ? pass : fail)("2a. micro_trend card shows 1 or 2 alternatives", `${badge} | ${alts.length}`);
+      const linkOk = (a) => /^https?:\/\//.test(a.href) && a.target === "_blank" && /noopener/.test(a.rel) && /noreferrer/.test(a.rel) && a.text.length > 0;
+      (alts.every(linkOk) ? pass : fail)("2a. every alternative is an http(s) link with target _blank and rel noopener noreferrer", JSON.stringify(alts));
+      (alts.every((a) => a.kind !== "search" || /^Search \S/.test(a.text)) ? pass : fail)("2a. search fallback links read 'Search <store> for <type>'", alts.map((a) => `${a.kind}: ${a.text.replace(/\n/g, " | ")}`).join(" ; "));
+    } else {
+      (altBoxes === 0 ? pass : fail)("2a. no alternatives on a non-micro_trend verdict", `${badge} | ${altBoxes} alternative blocks`);
+      skip("2a. alternative links on a micro_trend card", NEEDS_SHORT_TREND);
+    }
     await page.screenshot({ path: `${OUT}/2a-meta-verdict.png` });
   }
 
@@ -400,9 +409,16 @@ const RECORDER = `(() => {
   {
     const login = await fetch(`${API}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password: "secret123" }) }).then((r) => r.json());
     const dash = await fetch(`${API}/dashboard`, { headers: { Authorization: `Bearer ${login.token}` } }).then((r) => r.json());
-    const alts = (dash.verdicts || []).flatMap((v) => v.alternatives || []);
-    (alts.length > 0 && alts.every((a) => typeof a.url === "string" && /^https?:\/\//.test(a.url) && ["product", "search"].includes(a.link_kind)) ? pass : fail)(
-      "9. /dashboard: every alternative has a url and link_kind", `${alts.length} alternatives`);
+    const vs = dash.verdicts || [];
+    const alts = vs.flatMap((v) => v.alternatives || []);
+    (vs.every((v) => v.verdict === "micro_trend" || !(v.alternatives || []).length) ? pass : fail)(
+      "9. /dashboard: alternatives appear on micro_trend verdicts only", `${vs.length} verdicts`);
+    if (alts.length) {
+      (alts.every((a) => typeof a.url === "string" && /^https?:\/\//.test(a.url) && ["product", "search"].includes(a.link_kind)) ? pass : fail)(
+        "9. /dashboard: every alternative has a url and link_kind", `${alts.length} alternatives`);
+    } else {
+      skip("9. /dashboard: every alternative has a url and link_kind", NEEDS_SHORT_TREND);
+    }
   }
   // ---- 10. Part 5 card: backend down shows "Second look unavailable" and never blocks the store ----
   // The service worker's fetch to /analyze is made to fail, as if the server were down.
@@ -431,7 +447,8 @@ const RECORDER = `(() => {
   (errors.length ? fail : pass)("no console or page errors", errors.join(" | "));
 
   await ctx.close();
-  console.log(`\n${results.filter((r) => r[0] === "PASS").length}/${results.length} passed`);
+  const skipped = results.filter((r) => r[0] === "SKIP").length;
+  console.log(`\n${results.filter((r) => r[0] === "PASS").length}/${results.length - skipped} passed${skipped ? `, ${skipped} skipped (see SKIP lines)` : ""}`);
   fs.writeFileSync(path.join(OUT, "results.json"), JSON.stringify({ email, results }, null, 2));
   process.exit(results.some((r) => r[0] === "FAIL") ? 1 : 0);
 })().catch((e) => { console.error("E2E crashed:", e); process.exit(2); });
