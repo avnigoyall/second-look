@@ -202,6 +202,9 @@
     .status { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .status:empty { display: none; }
     .status.error { color: var(--danger); }
+    .status.saved { display: flex; gap: 6px; align-items: center; color: var(--ink); font-variant-numeric: tabular-nums; }
+    .saved-icon { display: inline-grid; flex: none; color: var(--accent); }
+    .saved-icon svg { width: 14px; height: 14px; }
 
     /* ---------- forms (paste and price) ---------- */
     form { display: grid; gap: 10px; margin-top: 12px; }

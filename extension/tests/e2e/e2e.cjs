@@ -101,6 +101,10 @@ const RECORDER = `(() => {
     ((await storage()).length === before ? pass : fail)("1. 3s debounce per URL");
     await card(page).getByRole("button", { name: "Skip it" }).click();
     await card(page).locator(".status", { hasText: "Skipped" }).waitFor();
+    // Part 6: Nessie moved the money ("Skipped. $X moved to savings") or not ("... pending").
+    // E2E users are not Nessie-enabled, so pending is expected, but either is accepted.
+    const confirm = (await card(page).locator(".status").innerText()).trim();
+    (/^Skipped\. (\$\d+\.\d{2} moved to savings|Savings update pending)$/.test(confirm) ? pass : fail)("1. Skip it confirmation copy", confirm);
     const entry = (await storage()).find((e) => e.name === "Wide Leg Barrel Jeans");
     (entry?.status === "skipped" ? pass : fail)("1. Skip it updates session status", entry?.status);
     await card(page).getByRole("button", { name: "Thumbs up" }).click();
