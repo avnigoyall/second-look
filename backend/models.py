@@ -257,15 +257,42 @@ class ItemAttributesResponse(BaseModel):
 
 
 class Balances(BaseModel):
-    """Placeholder until Nessie is wired in. Nessie v2 reports integer cents."""
+    """Nessie balances in integer cents, counting money still pending (Part 6). Null with placeholder true
+    when the user is not on Nessie, Nessie is down, or the action was "bought"."""
     checking_cents: int | None = None
     savings_cents: int | None = None
     placeholder: bool = True
 
 
+TransferStatus = Literal["done", "pending", "failed", "no_price"]
+
+
+class TransferResult(BaseModel):
+    """Skip it transfer from Checking to Savings. done: Nessie accepted it. pending: still being tried in the
+    background. failed: gave up. no_price: the item had no price, so nothing moved."""
+    status: TransferStatus
+    amount_cents: int | None = None
+
+
 class ActionResponse(BaseModel):
     ok: bool
     balances: Balances
+    transfer: TransferResult | None = Field(None, description="Set on skipped for Nessie users only (Part 6)")
+
+
+class SavingsTransfer(BaseModel):
+    amount_cents: int
+    description: str
+    at: datetime
+
+
+class SavingsResponse(BaseModel):
+    """source nessie: live Nessie balances and transfers into Savings. source local: savings_cents is
+    round(money_kept * 100), checking_cents is null, transfers come from skipped verdicts."""
+    checking_cents: int | None = None
+    savings_cents: int
+    transfers: list[SavingsTransfer]
+    source: Literal["nessie", "local"]
 
 
 class OkResponse(BaseModel):
