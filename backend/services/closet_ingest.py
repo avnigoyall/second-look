@@ -20,7 +20,7 @@ from bson import ObjectId
 from PIL import Image
 
 from backend.db import ingest_jobs
-from backend.services.closet import item_name, thresholds, vector_search
+from backend.services.closet import item_name, query_texts, search_closet, thresholds
 from backend.services.embeddings import embed_many
 from backend.services.gemini_json import GeminiError, generate_json
 from backend.services.item_understanding import (
@@ -307,16 +307,20 @@ def flag_closet_duplicates(user_id: ObjectId, candidates: list[dict]) -> None:
     if not candidates:
         return
     limit = thresholds()["duplicate_similarity"]
-    texts = [attribute_string({**c["attributes"], "description": c["description"]}) for c in candidates]
-    vectors = embed_many(texts)
+    # Full text against described closet items, attributes-only text against hand-added ones (see closet.py).
+    pairs = [query_texts({**c["attributes"], "description": c["description"]}) for c in candidates]
+    texts = list(dict.fromkeys(t for pair in pairs for t in pair if t))
+    vectors = dict(zip(texts, embed_many(texts)))
 
     def top(args):
-        c, vector = args
-        hits = vector_search(user_id, vector, c["attributes"].get("category"), k=1)
+        c, (full, attr_only) = args
+        if not full:
+            return c, None
+        hits = search_closet(user_id, vectors[full], vectors[attr_only or full], c["attributes"].get("category"), k=1)
         return c, hits[0] if hits else None
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        for c, hit in pool.map(top, zip(candidates, vectors)):
+        for c, hit in pool.map(top, zip(candidates, pairs)):
             if hit is None:
                 continue
             score = round(2 * hit["score"] - 1, 4)  # Atlas reports (1 + cos) / 2

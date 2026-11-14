@@ -2,10 +2,17 @@
 
 Every closet item stores `embedding` = embed_text(attribute_string(attributes + description)), so items
 without photos can still be matched. Items with a photo also store `image_embedding` (not indexed).
+
+Items added by hand (quick add, ownership answer, iMessage "yes") have no description, so their embedding
+text is attributes only. A shopped item always has a description, and a full-text vector scores low against
+an attributes-only vector (0.64 for the same black shirt). Each closet item therefore stores
+`has_description`, and find_matches() compares like with like: the full shopped text against items with a
+description, the attributes-only shopped text against items without one.
 """
 import base64
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from bson import ObjectId
@@ -50,6 +57,11 @@ def embedding_text(attrs: dict, description: str | None = None, name: str | None
     return text or (name or "").strip()
 
 
+def has_description(description: str | None) -> bool:
+    """The `has_description` flag stored on closet docs. It decides which query vector the item is compared to."""
+    return bool((description or "").strip())
+
+
 def new_closet_doc(user_id: ObjectId, *, name: str, attributes: dict | None, source: str,
                    status: str = "owned", image_data: str | None = None, description: str = "",
                    extra: dict | None = None) -> dict:
@@ -64,6 +76,7 @@ def new_closet_doc(user_id: ObjectId, *, name: str, attributes: dict | None, sou
         "image_data": image_data,
         "attributes": attrs or None,
         "description": description or "",
+        "has_description": has_description(description),
         "embedding": embed_text(text) if text else None,
         "image_embedding": None,
         "created_at": datetime.now(timezone.utc),
@@ -77,11 +90,20 @@ def new_closet_doc(user_id: ObjectId, *, name: str, attributes: dict | None, sou
     return doc
 
 
-def vector_search(user_id: ObjectId, vector: list[float], category: str | None, k: int = 5) -> list[dict]:
-    """Raw $vectorSearch over this user's closet. Returns documents with a `score` and no vectors or images."""
+def vector_search(user_id: ObjectId, vector: list[float], category: str | None, k: int = 5,
+                  described: bool | None = None) -> list[dict]:
+    """Raw $vectorSearch over this user's closet. Returns documents with a `score` and no vectors or images.
+
+    described: True keeps items with a description (and older items without the flag), False keeps items
+    without one, None keeps all.
+    """
     filt = {"user_id": user_id}
     if category:
         filt["attributes.category"] = category
+    if described is True:
+        filt["has_description"] = {"$ne": False}  # a doc stored before the flag existed counts as described
+    elif described is False:
+        filt["has_description"] = False
     pipeline = [
         {"$vectorSearch": {"index": VECTOR_INDEX, "path": "embedding", "queryVector": vector,
                            "numCandidates": max(NUM_CANDIDATES, k), "limit": k, "filter": filt}},
@@ -89,6 +111,38 @@ def vector_search(user_id: ObjectId, vector: list[float], category: str | None, 
                       "score": {"$meta": "vectorSearchScore"}}},
     ]
     return list(closet_items.aggregate(pipeline))
+
+
+def query_texts(attrs: dict) -> tuple[str, str]:
+    """(full text, attributes-only text) for an item being compared to the closet. Equal when there is no description."""
+    return attribute_string(attrs), attribute_string({**attrs, "description": ""})
+
+
+def search_closet(user_id: ObjectId, full_vector: list[float], attr_vector: list[float], category: str | None,
+                  k: int = 5) -> list[dict]:
+    """Two $vectorSearch calls in parallel, each comparing like with like, merged best first.
+
+    full_vector is compared to items with a description, attr_vector to items without one. The two filters
+    are disjoint, so the merge only sorts. Returns raw docs with the Atlas `score`.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_full = pool.submit(vector_search, user_id, full_vector, category, k, True)
+        f_attr = pool.submit(vector_search, user_id, attr_vector, category, k, False)
+        docs = f_full.result() + f_attr.result()
+    return sorted(docs, key=lambda d: -d["score"])[:k]
+
+
+def embed_query(attrs: dict) -> tuple[list[float], list[float]] | None:
+    """(full vector, attributes-only vector), embedded in parallel. One call when the texts are equal. None if empty."""
+    full, attr_only = query_texts(attrs)
+    if not full:
+        return None
+    if not attr_only or attr_only == full:
+        vector = embed_text(full)
+        return vector, vector
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_full, f_attr = pool.submit(embed_text, full), pool.submit(embed_text, attr_only)
+        return f_full.result(), f_attr.result()
 
 
 def atlas_to_cosine(score: float) -> float:
@@ -100,12 +154,13 @@ def find_matches(user_id: ObjectId, attrs: dict, k: int = 5) -> list[dict]:
     """Closet items closest to `attrs` (same user, same category). Never returns image_data or embedding.
 
     Returns [{score, id, name, attributes, status}], best first. score is cosine similarity (-1 to 1), the
-    same number scripts/tune_matching.py prints, so thresholds.json means one thing everywhere.
+    same number scripts/tune_matching.py prints, so thresholds.json means one thing everywhere. Items without
+    a description are scored against the attributes-only text of `attrs` (see the module docstring).
     """
-    text = attribute_string(attrs)
-    if not text:
+    vectors = embed_query(attrs)
+    if vectors is None:
         return []
-    docs = vector_search(user_id, embed_text(text), attrs.get("category"), k)
+    docs = search_closet(user_id, *vectors, attrs.get("category"), k)
     return [{"score": atlas_to_cosine(d["score"]), "id": str(d["_id"]), "name": d["name"],
              "attributes": d.get("attributes"), "status": d.get("status", "owned")} for d in docs]
 
