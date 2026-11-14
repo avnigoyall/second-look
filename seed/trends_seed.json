@@ -11,7 +11,7 @@
     "lifespan_source_url": "url from sources when lifespan_weeks_est or lifespan_bucket is set, else null",
     "sources": [{"title": "string", "url": "https://..."}],
     "example_images": ["https://... or data:image/..."],
-    "alternatives": [{"type": "string", "why_it_lasts": "string", "where_to_look": "string", "url": "null or a url from sources"}]
+    "alternatives": [{"type": "string", "why_it_lasts": "string", "where_to_look": "string", "url": "null or a url from sources", "product_url": "optional. Leave out: seed_trends.py finds a product link with web search, or falls back to a store search link"}]
   },
   "trends": [
     {

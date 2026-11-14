@@ -46,10 +46,14 @@ class Item(BaseModel):
 
 
 class Alternative(BaseModel):
+    """Something to buy instead (micro_trend verdicts). Always has a link: a product page, or a store
+    search page when link_kind is "search". Build these with backend.alternatives.alternatives_for_trend."""
     name: str
-    url: str | None = None
+    url: str = Field(min_length=1, description="Product page, or store search page when link_kind is search")
     price: float | None = None
     reason: str | None = None
+    store: str | None = None
+    link_kind: Literal["product", "search"] = "product"
 
 
 class Outfit(BaseModel):
