@@ -4,6 +4,8 @@
 // reader runs before Gemini. If the price is still missing after Gemini, the last tier asks Claude
 // (POST /read-price) with text windows around every amount on the whole page and around the
 // add-to-cart button. price_source is jsonld, meta, dom, gemini, claude, or null.
+// When the name is known and only the price is missing, the Gemini and Claude tiers run at the same
+// time and Gemini's price still wins, so the card waits for the slower of the two, not their sum.
 // readItemWithDetails() also returns what each tier saw, for Diagnose.
 (function (global) {
   "use strict";
@@ -13,6 +15,9 @@
   // The backend gives Claude 4 s. Past this the tier gives up and the card asks for the price.
   const CLAUDE_WAIT_MS = 5000;
   const CART_AREA_MAX = 1500; // the add-to-cart container stops growing past this many characters
+  // When Gemini only fills the price and has not answered by now, a price from the Claude tier is used
+  // (a busy Gemini retries for up to 6 s more). Gemini usually answers in about 1 s.
+  const GEMINI_PRICE_WAIT_MS = 4000;
 
   function visibleText() {
     const main = document.querySelector("main, [role='main']");
@@ -85,8 +90,23 @@
     }
   }
 
+  // Gemini's answer, unless it is still pending after waitMs and Claude found a price: then a stand-in error.
+  async function geminiUnlessSlow(geminiP, claudeP, waitMs) {
+    let timer;
+    const late = new Promise((resolve) => { timer = setTimeout(() => resolve(null), waitMs); });
+    const first = await Promise.race([geminiP, late]);
+    clearTimeout(timer);
+    if (first) return first;
+    const claude = await claudeP;
+    if (global.SecondLookPrice.parsePrice(claude.result?.price) != null) {
+      return { ms: waitMs, error: `no answer within ${waitMs} ms, the Claude tier had the price` };
+    }
+    return geminiP;
+  }
+
   async function readItemWithDetails({ useGemini = true } = {}) {
     const details = { url: location.href, tiers: {} };
+    const started = Date.now();
     let t1 = null;
     let t2 = null;
     try { t1 = global.SecondLookJsonLd.readJsonLd(); } catch (e) { details.tiers.jsonld = { error: String(e) }; }
@@ -137,8 +157,12 @@
 
     // Tier 3 runs when the name or image is missing, or only to fill a missing price.
     const needsGemini = !item.name || !item.image_url || item.price == null;
+    // Name known, price missing: start the Claude tier now, next to Gemini. Same inputs as running it after.
+    const claudeEarly = item.name && item.price == null && useGemini ? askClaude(item.name) : null;
     if (needsGemini && useGemini) {
-      const gemini = await askGemini(item.image_url || largestImage());
+      const geminiP = askGemini(item.image_url || largestImage());
+      const priceOnly = Boolean(claudeEarly && item.image_url);
+      const gemini = priceOnly ? await geminiUnlessSlow(geminiP, claudeEarly, GEMINI_PRICE_WAIT_MS) : await geminiP;
       details.tiers.gemini = gemini;
       const g = gemini.result;
       if (g) {
@@ -159,7 +183,7 @@
     // Last tier: only when every tier above found no price. A failure here leaves the price null,
     // and the card asks the shopper for it.
     if (item.name && item.price == null && useGemini) {
-      const claude = await askClaude(item.name);
+      const claude = await (claudeEarly || askClaude(item.name));
       details.tiers.claude = claude;
       const price = global.SecondLookPrice.parsePrice(claude.result?.price);
       if (price != null) {
@@ -168,13 +192,16 @@
         item.price_source = "claude";
       }
     } else {
-      details.tiers.claude = { used: false };
+      // Ran next to Gemini, but Gemini found the price first.
+      details.tiers.claude = claudeEarly ? { used: false, ran_in_parallel: true } : { used: false };
     }
 
     details.item = item.name ? item : null;
     details.price_source = item.price_source;
     console.log(LOG, "price source:", item.price_source || "none", item.price != null ? item.price : "");
     console.log(LOG, "readItem", details);
+    const ms = (tier) => (details.tiers[tier]?.ms != null ? details.tiers[tier].ms : "-");
+    console.log(LOG, `timing read total=${Date.now() - started} gemini_ms=${ms("gemini")} claude_ms=${ms("claude")}`);
     return details;
   }
 

@@ -136,10 +136,7 @@
     timer.mark("checking_shown");
     let item = null;
     try {
-      const details = await global.SecondLookReader.readItemWithDetails();
-      item = details.item;
-      timer.note("read_gemini_ms", details.tiers.gemini?.ms);
-      timer.note("read_claude_ms", details.tiers.claude?.ms);
+      item = await global.SecondLookReader.readItem(); // logs its own tier times
     } catch (err) {
       console.warn(LOG, "readItem failed", err);
     }
