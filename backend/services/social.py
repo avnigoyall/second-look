@@ -115,11 +115,82 @@ def query_window_coverage(tasks, since, until) -> str:
     for left, right, task in sorted(intersecting, key=lambda row: row[0]):
         if left > covered_until:
             break
-        exhausted = task.get("stop_reason") == "no_cursor" or (
-            task.get("stop_reason") == "empty_keyset_page" and not task.get("equal_timestamp_boundary_risk"))
+        exhausted = task.get("stop_reason") in ("no_cursor", "empty_keyset_page", "confirmed_empty", "confirmed_no_new") \
+            and not task.get("equal_timestamp_boundary_risk") and not task.get("partial") \
+            and not task.get("unresolved")
         if task.get("pages", 0) > 0 and task.get("done") and exhausted:
             covered_until = max(covered_until, right)
     return "complete" if covered_until >= until else "partial"
+
+
+def query_window_visited(tasks, since, until) -> bool:
+    """A successful first page proves a sampled window was queried, not exhausted."""
+    intervals = []
+    for task in tasks:
+        try:
+            left, right = utc(task["since"]), utc(task["until"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if task.get("pages", 0) > 0 and left < until and right > since:
+            intervals.append((max(left, since), min(right, until)))
+    covered_until = since
+    for left, right in sorted(intervals):
+        if left > covered_until:
+            break
+        covered_until = max(covered_until, right)
+    return covered_until >= until
+
+
+def task_saturated(task) -> bool:
+    return bool(task.get("saturated")) or task.get("first_page_count") == 20
+
+
+def task_saturation_known(task) -> bool:
+    return isinstance(task.get("first_page_count"), int) or isinstance(task.get("saturated"), bool)
+
+
+def preview_recent_momentum(metrics, config=None) -> dict:
+    """Read-only proposal: recent sample movement, never a published replacement rule.
+
+    Require eight fully visited term/corpus windows and a nonempty corpus each week.
+    A zero from an unexhausted term search is not treated as observed absence. Compare
+    four-week normalized sample sums. Partial or saturated counts keep confidence low.
+    Historical peak and decay remain unchanged, including nulls for incomplete history.
+    """
+    cfg = config or momentum_config()
+    rows = []
+    for metric in metrics:
+        weekly = [w for w in metric.get("weekly_counts", []) if w.get("complete")][-8:]
+        eligible = len(weekly) == 8 and all(w.get("query_visited") and w.get("corpus_query_visited")
+                  and w.get("corpus_count", 0) > 0 and
+                  (w.get("count", 0) > 0 or w.get("query_coverage") == "complete") for w in weekly)
+        sample_posts = sum(w.get("count", 0) for w in weekly)
+        eligible = eligible and sample_posts >= cfg["min_posts"]
+        ratio, proposed, confidence = None, "unknown", "low"
+        if eligible:
+            prior = sum(w["normalized"] for w in weekly[:4])
+            recent = sum(w["normalized"] for w in weekly[4:])
+            if prior > 0:
+                ratio = recent / prior
+                proposed = "rising" if ratio >= cfg["rising_recent_growth"] else (
+                    "fading" if ratio <= 1 / cfg["rising_recent_growth"] else "steady")
+            elif recent > 0:
+                # A zero denominator is eligible only after exhausted zero-result searches.
+                proposed = "rising"
+            if sample_posts >= cfg["medium_confidence_posts"] and \
+                    all(not w.get("counts_are_lower_bound", True) for w in weekly):
+                confidence = "medium"
+        rows.append({"term": metric["term"], "published_momentum": metric.get("momentum", "unknown"),
+                     "proposed_recent_momentum": proposed, "proposed_confidence": confidence,
+                     "recent_eight_weeks_eligible": bool(eligible), "recent_growth_ratio": ratio,
+                     "recent_sample_posts": sample_posts,
+                     "historical_decay_ratio_unchanged": metric.get("decay_ratio"),
+                     "note": "Preview only. Movement in sampled lower-bound counts is sensitive to search truncation "
+                             "and is not platform growth, a historical peak, or lifespan evidence."})
+    return {"policy": "proposal_recent_eight_visited_weeks", "writes": False,
+            "published_policy_changed": False, "terms": rows,
+            "published_non_unknown": sum(r["published_momentum"] != "unknown" for r in rows),
+            "proposed_non_unknown": sum(r["proposed_recent_momentum"] != "unknown" for r in rows)}
 
 
 def compute_trends(posts, communities=(), *, start=None, end=None, terms=(), config=None, coverage=None) -> list[dict]:
@@ -178,17 +249,33 @@ def compute_trends(posts, communities=(), *, start=None, end=None, terms=(), con
     term_week_coverage = {
         (term, w): query_window_coverage(tasks_by_term[term], max(start, w), min(end, w + timedelta(days=7)))
         if coverage is not None else "complete" for term in all_terms for w in weeks}
+    term_week_visited = {
+        (term, w): query_window_visited(tasks_by_term[term], max(start, w), min(end, w + timedelta(days=7)))
+        if coverage is not None else True for term in all_terms for w in weeks}
+    term_week_saturated = {}
+    for term in all_terms:
+        for w in weeks:
+            term_week_saturated[(term, w)] = any(task_saturated(t) for t in tasks_by_term[term]
+                if utc(t["since"]) < min(end, w + timedelta(days=7)) and utc(t["until"]) > max(start, w))
     corpus_week_coverage = {
         w: ("complete" if all(term_week_coverage[(term, w)] == "complete" for term in all_terms)
             else "incomplete") for w in weeks}
     output = []
     for term in all_terms:
         samples = per_term[term]
+        saturation_metadata_windows = sum(task_saturation_known(t) for t in tasks_by_term[term])
+        saturation_unknown_windows = len(tasks_by_term[term]) - saturation_metadata_windows
         counts = Counter(monday(p["created_at"]) for p in samples)
         weekly = [{"week": w.date().isoformat(), "count": counts[w], "corpus_count": corpus[w],
                    "normalized": counts[w] / corpus[w] if corpus[w] else 0.0,
                    "query_coverage": term_week_coverage[(term, w)],
                    "corpus_query_coverage": corpus_week_coverage[w],
+                   "query_visited": term_week_visited[(term, w)],
+                   "corpus_query_visited": all(term_week_visited[(other, w)] for other in all_terms),
+                   "saturated": term_week_saturated[(term, w)],
+                   "counts_are_lower_bound": (term_week_saturated[(term, w)]
+                       or term_week_coverage[(term, w)] != "complete" or corpus_week_coverage[w] != "complete"
+                       or any(term_week_saturated[(other, w)] for other in all_terms)),
                    "complete": w >= start and w + timedelta(days=7) <= end} for w in weeks]
         complete = [w for w in weekly if w["complete"]]
         values = [w["normalized"] for w in complete]
@@ -197,6 +284,10 @@ def compute_trends(posts, communities=(), *, start=None, end=None, terms=(), con
                          and w["corpus_query_coverage"] == "complete"]
         observed_weeks = sum(w["corpus_count"] > 0 for w in fully_queried)
         query_coverage_complete = len(complete) > 0 and len(fully_queried) == len(complete)
+        # The user's saturation cap counts all observation windows, including boundary weeks.
+        # Momentum calculations above and below still use only complete calendar weeks.
+        saturated_weeks = sum(w["saturated"] for w in weekly)
+        saturated_share = saturated_weeks / len(weekly) if weekly else 0.0
         rolling = [sum(values[i:i + 4]) for i in range(len(values) - 3)]
         peak_sum = max(rolling, default=0.0)
         # Decay is unavailable if any of the latest four weeks has no corpus.
@@ -235,6 +326,23 @@ def compute_trends(posts, communities=(), *, start=None, end=None, terms=(), con
         if count >= cfg["high_confidence_posts"] and observed_weeks >= cfg["high_confidence_weeks"] \
                 and recent_observed and query_coverage_complete:
             confidence = "high"
+        saturation_capped = saturated_share > 0.25 or (coverage is not None and saturation_unknown_windows > 0)
+        if saturation_capped and confidence == "high":
+            confidence = "medium"
+        coverage_note = ("All complete calendar weeks exhausted the sampled term searches."
+                         if query_coverage_complete else
+                         "Unvisited, truncated or unknown term/corpus searches are not observed absence. "
+                         "Decay is unavailable; momentum is unknown and confidence stays low.")
+        if saturated_weeks:
+            coverage_note += (f" {saturated_weeks}/{len(weekly)} observation weekly windows, including partial boundary "
+                              "weeks, saturated the 20-post "
+                              "first page. Those counts remain labeled lower bounds even after confirmed exhaustion.")
+        if saturated_share > 0.25:
+            coverage_note += " Saturation exceeds 25 percent, so confidence is capped at medium."
+        if saturation_unknown_windows:
+            coverage_note += (f" First-page saturation metadata is missing for {saturation_unknown_windows} windows; "
+                              "reported saturated-window counts exclude those unknown windows. "
+                              "Confidence is capped at medium until saturation metadata is verified.")
         metrics = {"term": term, "weekly_counts": weekly,
                    "first_seen_in_window": iso(first) if first else None,
                    "peak_week": peak_week, "decay_ratio": decay, "breadth": breadth,
@@ -246,11 +354,19 @@ def compute_trends(posts, communities=(), *, start=None, end=None, terms=(), con
                    "query_coverage_status": ("complete" if query_coverage_complete else "incomplete_or_unknown"),
                    "query_complete_weeks": len(fully_queried),
                    "calendar_complete_weeks": len(complete),
+                   "completed_windows": sum(query_window_coverage([t], utc(t["since"]), utc(t["until"])) == "complete"
+                                            for t in tasks_by_term[term]),
+                   "total_windows": len(tasks_by_term[term]),
+                   "saturated_windows": sum(task_saturated(t) for t in tasks_by_term[term]),
+                   "saturation_metadata_windows": saturation_metadata_windows,
+                   "saturation_unknown_windows": saturation_unknown_windows,
+                   "saturated_weeks": saturated_weeks, "saturated_week_share": saturated_share,
+                   "saturation_week_denominator": len(weekly),
+                   "saturation_week_basis": "all_observation_weekly_windows_including_partial_boundaries",
+                   "saturation_confidence_cap": "medium" if saturation_capped else None,
+                   "counts_are_lower_bound": any(w["counts_are_lower_bound"] for w in weekly),
                    "query_incomplete_weeks": [w["week"] for w in complete if w not in fully_queried],
-                   "coverage_note": ("All complete calendar weeks exhausted the sampled term searches."
-                                     if query_coverage_complete else
-                                     "Unvisited, truncated or unknown term/corpus searches are not observed absence. "
-                                     "Decay is unavailable; momentum is unknown and confidence stays low."),
+                   "coverage_note": coverage_note,
                    "window_start": iso(start), "window_end": iso(end), "computed_at": iso(datetime.now(timezone.utc)),
                    "estimate": True, "counts_are_sampled": True}
         metrics["momentum"] = classify_momentum(metrics, cfg)
@@ -327,8 +443,9 @@ def context_from_hits(hits: list[dict], config=None, trends=None) -> dict | None
     if not trend:
         return None
     keys = ("term", "first_seen_in_window", "peak_week", "decay_ratio", "breadth", "concentration",
-            "momentum", "confidence", "query_coverage_complete", "coverage_note")
-    result = {k: trend.get(k) for k in keys}
+            "momentum", "confidence", "query_coverage_complete", "coverage_note", "saturated_week_share",
+            "saturation_confidence_cap", "counts_are_lower_bound")
+    result = {k: trend[k] for k in keys if k in trend}
     result.update(similarity=similarity, weekly_counts=list(trend.get("weekly_counts") or [])[-26:], estimate=True)
     result["examples"] = [{"uri": p["uri"], "url": post_url(p["uri"]), "snippet": sanitize_snippet(p.get("text"))}
                           for p in sorted(matched, key=lambda p: -p.get("similarity", -1)) if post_url(p.get("uri"))][:2]

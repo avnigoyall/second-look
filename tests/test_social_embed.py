@@ -1,6 +1,7 @@
 """Offline embedding jobs: independent inputs, resumability, bounded retries."""
 import unittest
 import time
+import json
 from threading import Barrier
 from unittest.mock import Mock
 
@@ -28,6 +29,55 @@ class Collection:
 
 
 class EmbedTests(unittest.TestCase):
+    def test_opt_in_transient_403_retries_then_succeeds(self):
+        collection = Collection([{"uri": "a", "text": "cargo pants"}])
+        error = RuntimeError("secret provider message")
+        error.code = 403
+        one = Mock(side_effect=[error, error, [1.0] * 768])
+        sleeps = []
+        result = embed.embed_posts(collection, one, limit=1, workers=1,
+                                   transient_403_retries=2, sleep=sleeps.append)
+        self.assertEqual(result["model_calls"], 3)
+        self.assertEqual(result["embedded"], 1)
+        self.assertEqual(sleeps, [2, 4])
+
+    def test_persistent_403_stops_after_explicit_budget(self):
+        collection = Collection([{"uri": str(i), "text": "cargo"} for i in range(20)])
+        error = RuntimeError("secret message")
+        error.code = 403
+        one, sleeps = Mock(side_effect=error), []
+        with self.assertRaises(embed.EmbeddingJobStopped) as captured:
+            embed.embed_posts(collection, one, workers=1, transient_403_retries=2, sleep=sleeps.append)
+        self.assertEqual(one.call_count, 3)
+        self.assertEqual(captured.exception.report["model_calls"], 3)
+        self.assertEqual(sleeps, [2, 4])
+
+    def test_default_403_and_opt_in_401_are_immediate(self):
+        for code, retries in [(403, 0), (401, 2)]:
+            collection = Collection([{"uri": "a", "text": "cargo"}])
+            error = RuntimeError("secret")
+            error.code = code
+            one, sleeps = Mock(side_effect=error), []
+            with self.assertRaises(embed.EmbeddingJobStopped):
+                embed.embed_posts(collection, one, workers=1, transient_403_retries=retries, sleep=sleeps.append)
+            self.assertEqual(one.call_count, 1)
+            self.assertEqual(sleeps, [])
+
+    def test_safe_diagnostics_allowlist_excludes_secret_payloads(self):
+        error = RuntimeError("secret-key-secret-input-secret-url")
+        error.code = 403
+        error.details = {"error": {"message": "secret-input", "details": [
+            {"reason": "API_KEY_INVALID", "metadata": {"api_key": "secret-key"}}]}}
+        wrapper = RuntimeError("secret wrapper")
+        wrapper.__cause__ = error
+        report = embed.safe_error_report(wrapper)
+        self.assertEqual(report["diagnostics"], {"category": "credential", "reason": "API_KEY_INVALID"})
+        self.assertNotIn("secret", json.dumps(report))
+        error.details["error"]["details"][0]["reason"] = "secret-unrecognized-reason"
+        report = embed.safe_error_report(wrapper)
+        self.assertEqual(report["diagnostics"], {"category": "permission"})
+        self.assertNotIn("secret", json.dumps(report))
+
     def test_wrapped_401_aborts_corpus_without_retry(self):
         collection = Collection([{"uri": str(i), "text": str(i)} for i in range(100)])
         sleeps = []

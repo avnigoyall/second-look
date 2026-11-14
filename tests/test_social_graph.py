@@ -1,6 +1,6 @@
 """Graph tests are deterministic and never contact Bluesky, Atlas, or models."""
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import networkx as nx
 
@@ -12,6 +12,29 @@ def post(uri, author, **fields):
 
 
 class GraphTests(unittest.TestCase):
+    def test_interaction_only_export_does_not_invent_similarity_measurements(self):
+        source = graph.interaction_graph([post("1", "a")])
+        groups = graph.communities(source)
+        names = {group["id"]: "Cargo discussion" for group in groups}
+        result = graph.export_graph(source, groups, names, graph.graph_stats(source), similarity_evaluated=False)
+        self.assertEqual(result["stats"]["largest_component_share_interaction"], 1)
+        self.assertIsNone(result["stats"]["largest_component_share_with_similarity"])
+        self.assertIsNone(result["stats"]["isolated_authors_with_similarity"])
+
+    def test_default_live_graph_rejects_missing_embeddings_before_model_calls(self):
+        import sys
+        from types import ModuleType
+        fake = ModuleType("backend.db")
+        collection = Mock()
+        collection.count_documents.return_value = 3000
+        collection.find.return_value = [post("1", "a")]
+        fake.db = {"social_posts": collection}
+        with patch.dict(sys.modules, {"backend.db": fake}), patch.object(sys, "argv", ["social_graph.py"]), \
+                patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as stopped:
+                graph.main()
+        self.assertEqual(stopped.exception.code, 2)
+
     def test_real_kinds_weights_external_authors_and_isolates(self):
         posts = [post("1", "a", reply_parent_author_hash="b", quote_author_hash="c",
                       mention_author_hashes=["d", "d", "a"]), post("2", "z")]
@@ -139,6 +162,57 @@ class GraphTests(unittest.TestCase):
         export = graph.export_graph(source, groups, names, graph.graph_stats(source))
         self.assertEqual(export["communities"][0]["name"], "Unclassified discussion")
         self.assertEqual(export["nodes"][0]["community_name"], "Unclassified discussion")
+
+    def test_preloaded_cache_uses_one_read_and_generates_only_missing_safe_names(self):
+        groups = [{"id": key, "members": [key], "size": 1} for key in ("a", "b", "c")]
+        summaries = {key: {"top_terms": ["cargo pants"], "snippets": []} for key in ("a", "b", "c")}
+        cache, name_one = Mock(), Mock(return_value="Cargo conversations")
+        cache.find.return_value = [{"_id": "name:a", "name": "Cargo regulars", "source": "claude"},
+                                   {"_id": "name:b", "name": "alice.example club", "source": "claude"}]
+        loaded = graph.load_name_cache(cache, groups)
+        names, calls = graph.name_communities(groups, summaries, cache, name_one, 1, cached_names=loaded)
+        cache.find.assert_called_once()
+        cache.find_one.assert_not_called()
+        name_one.assert_called_once()
+        self.assertEqual(calls, 1)
+        self.assertEqual(names, {"a": "Cargo regulars", "b": "Cargo conversations", "c": "cargo pants"})
+        self.assertEqual(graph.count_named_communities(groups, names, loaded), 2)
+
+    def test_named_count_excludes_unsafe_stale_and_non_model_names(self):
+        groups = [{"id": key} for key in ("safe", "unsafe", "fallback", "changed")]
+        names = {"safe": "Cargo discussion", "unsafe": "cargo pants", "fallback": "Plain basics", "changed": "New label"}
+        loaded = {"name:safe": {"name": "Cargo discussion", "source": "claude"},
+                  "name:unsafe": {"name": "alice.example", "source": "claude"},
+                  "name:fallback": {"name": "Plain basics", "source": "terms"},
+                  "name:changed": {"name": "Old label", "source": "claude"},
+                  "name:stale": {"name": "Past group", "source": "claude"}}
+        self.assertEqual(graph.count_named_communities(groups, names, loaded), 1)
+
+    def test_bulk_membership_is_chunked_deduped_and_contains_current_fields(self):
+        authors = [f"hash{i:04}" for i in range(1001)]
+        groups = [{"id": "g", "members": authors + [authors[0]], "size": 1001}]
+        collection = Mock()
+        count = graph.persist_membership(collection, groups, {"g": "Cargo discussion"}, "run-utc")
+        self.assertEqual(count, 1001)
+        collection.create_index.assert_called_once_with("author_hash", unique=True)
+        self.assertEqual([len(call.args[0]) for call in collection.bulk_write.call_args_list], [500, 500, 1])
+        operations = [operation for call in collection.bulk_write.call_args_list for operation in call.args[0]]
+        self.assertEqual(len({operation._filter["author_hash"] for operation in operations}), 1001)
+        for call in collection.bulk_write.call_args_list:
+            self.assertFalse(call.kwargs["ordered"])
+        for operation in operations:
+            self.assertTrue(operation._upsert)
+            self.assertEqual(operation._doc["$set"], {"community_id": "g", "community_size": 1001,
+                                                   "name": "Cargo discussion", "graph_run_id": "run-utc"})
+        collection.update_one.assert_not_called()
+
+    def test_bulk_membership_rejects_conflicting_author_assignments(self):
+        collection = Mock()
+        groups = [{"id": "a", "members": ["same"], "size": 1},
+                  {"id": "b", "members": ["same"], "size": 1}]
+        with self.assertRaises(ValueError):
+            graph.persist_membership(collection, groups, {"a": "Cargo", "b": "Basics"}, "run")
+        collection.bulk_write.assert_not_called()
 
 
 if __name__ == "__main__":

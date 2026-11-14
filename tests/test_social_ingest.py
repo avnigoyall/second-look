@@ -3,13 +3,13 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import httpx
 
 from scripts.social_ingest import (ApiFailure, BlueskyClient, BudgetExceeded, author_hash,
-                                   initial_state, ingest, normalize_post, persist_post,
-                                   iso, normalize_times, persist_page, prepare_resume, probe, thread_posts, weekly_windows)
+                                   enrich_threads, initial_state, ingest, normalize_post, persist_post,
+                                   audit_first_pages, extend_terms, insertion_budget, iso, normalize_times, persist_page, prepare_resume, probe, quality_report, requeue_verification, thread_posts, weekly_windows)
 
 
 def raw_post(uri="at://did:plc:one/app.bsky.feed.post/a"):
@@ -110,6 +110,22 @@ class NormalizationTests(unittest.TestCase):
 
 
 class WindowTests(unittest.TestCase):
+    def test_thread_addition_cannot_close_empty_search_week(self):
+        thread = normalize_post(raw_post("thread"), "cargo pants", "salt")
+        thread["source"] = "thread"
+        search = normalize_post(raw_post("search"), "cargo pants", "salt")
+        search["created_at"] = "2026-01-13T12:00:00.000000Z"
+        collection = Mock()
+        collection.find.return_value = [thread, search]
+        state = initial_state(["cargo pants"], datetime(2026, 2, 1, tzinfo=timezone.utc))
+        with tempfile.TemporaryDirectory() as directory, patch("scripts.social_ingest.save_json"):
+            report = quality_report(collection, state, {}, Path(directory) / "quality.md")
+        self.assertEqual(report["posts_per_term"]["cargo pants"], 2)
+        self.assertEqual(report["search_posts_per_term"]["cargo pants"], 1)
+        self.assertEqual(report["thread_posts_per_term"]["cargo pants"], 1)
+        self.assertIn("2026-01-05", report["coverage_gaps"]["cargo pants"])
+        self.assertNotIn("2026-01-12", report["coverage_gaps"]["cargo pants"])
+
     def test_year_windows_are_contiguous_and_monday_aligned(self):
         end = datetime(2026, 11, 14, 12, 34, tzinfo=timezone.utc)
         windows = weekly_windows(end)
@@ -214,9 +230,9 @@ class RequestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             ingest(self.make_client(handler), FakeCollection(), state, "salt", True, 25000, Path(directory) / "state.json")
         self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[1]["until"], "2026-01-06T12:00:00.000000Z")
-        self.assertTrue(state["tasks"][0]["equal_timestamp_boundary_risk"])
-        self.assertEqual(state["tasks"][0]["stop_reason"], "empty_keyset_page")
+        self.assertEqual(calls[1]["until"], "2026-01-06T12:00:00.000001Z")
+        self.assertFalse(state["tasks"][0]["equal_timestamp_boundary_risk"])
+        self.assertEqual(state["tasks"][0]["stop_reason"], "confirmed_empty")
 
     def test_first_page_failure_does_not_skip_other_windows(self):
         calls = []
@@ -250,7 +266,7 @@ class RequestTests(unittest.TestCase):
                 return httpx.Response(200, json={"posts": []})
             ingest(self.make_client(success), FakeCollection(), state, "salt", True, 25000, path)
         self.assertEqual(calls[0]["cursor"], "saved-cursor")
-        self.assertEqual(state["tasks"][0]["stop_reason"], "no_cursor")
+        self.assertEqual(state["tasks"][0]["stop_reason"], "confirmed_empty")
         self.assertFalse(state["tasks"][0]["partial"])
 
     def test_short_page_does_not_stop_cursor_then_resume(self):
@@ -274,6 +290,223 @@ class RequestTests(unittest.TestCase):
         self.assertEqual(calls[1]["cursor"], "page2")
         self.assertTrue(state["tasks"][0]["done"])
 
+    def test_two_hundred_threads_five_new_each_global_and_request_caps(self):
+        class Cursor(list):
+            def sort(self, *args):
+                return self
+            def limit(self, count):
+                return self[:count]
+        class Collection(FakeCollection):
+            def find(self, query, projection):
+                if "uri" in query:
+                    return Cursor([self.posts[uri] for uri in query["uri"]["$in"] if uri in self.posts])
+                return Cursor([{k: p[k] for k in ("uri", "term")} for p in self.posts.values()
+                               if p.get("reply_count", 0) > 0 and p.get("source") != "thread"])
+        collection = Collection()
+        for number in range(200):
+            post = normalize_post(raw_post(f"at://did:plc:one/app.bsky.feed.post/root{number}"), "cargo pants", "salt")
+            post["terms"] = ["cargo pants"]
+            collection.posts[post["uri"]] = post
+        def handler(request):
+            uri = request.url.params["uri"]
+            tree = {"post": raw_post(uri), "replies": [{"post": raw_post(uri + f"-reply{i}")} for i in range(10)]}
+            return httpx.Response(200, json={"thread": tree})
+        state = initial_state(["cargo pants"], datetime(2026, 1, 7, tzinfo=timezone.utc))
+        passed = {"endpoints": {"app.bsky.feed.getPostThread": {"passed": True}}}
+        api = self.make_client(handler)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "state.json"
+            enrich_threads(api, collection, state, passed, "salt", True, 1200, path)
+            self.assertEqual(len(collection.posts), 1200)
+            self.assertEqual(api.requests, 200)
+            self.assertEqual(len(state["thread"]["fetched"]), 200)
+            self.assertEqual(state["thread"]["new_posts"], 1000)
+            self.assertEqual(state["thread"]["skipped_new_posts"], 1000)
+            self.assertEqual(state["thread"]["truncated_threads"], 200)
+            # Resuming never fetches the same successful candidate again.
+            enrich_threads(api, collection, state, passed, "salt", True, 1200, path)
+            self.assertEqual(api.requests, 200)
+            state["thread"]["fetched"] = []
+            state["thread"]["requests"] = 399
+            api = self.make_client(handler)
+            enrich_threads(api, collection, state, passed, "salt", True, 1200, path)
+            self.assertEqual(api.requests, 1)
+            self.assertEqual(state["thread"]["requests"], 400)
+
 
 if __name__ == "__main__":
     unittest.main()
+
+class WindowAuditTests(unittest.TestCase):
+    make_client = RequestTests.make_client
+
+    def state(self):
+        state = initial_state(['cargo pants'], datetime(2026, 1, 7, tzinfo=timezone.utc))
+        state['tasks'] = state['tasks'][:1]
+        state['pagination'] = 'keyset'
+        return state
+
+    def run_ingest(self, state, collection, responses, **kwargs):
+        pages = iter(responses)
+        api = self.make_client(lambda request: httpx.Response(200, json={'posts': next(pages)}))
+        with tempfile.TemporaryDirectory() as directory:
+            ingest(api, collection, state, 'salt', True, kwargs.pop('cap', 35000),
+                   Path(directory) / 'state.json', **kwargs)
+        return api
+
+    def test_confirmation_request_at_full_global_cap(self):
+        state, collection = self.state(), FakeCollection()
+        persist_post(collection, normalize_post(raw_post(), 'cargo pants', 'salt'), 1)
+        api = self.run_ingest(state, collection, [[]], cap=1, confirm_only=True)
+        self.assertEqual(api.requests, 1)
+        self.assertTrue(state['tasks'][0]['done'])
+        self.assertEqual(len(collection.posts), 1)
+        self.assertEqual(state['tasks'][0]['stop_reason'], 'confirmed_empty')
+
+    def test_zero_new_duplicate_confirmation(self):
+        state, collection = self.state(), FakeCollection()
+        post = raw_post()
+        persist_post(collection, normalize_post(post, 'cargo pants', 'salt'), 1)
+        self.run_ingest(state, collection, [[post]], cap=1, confirm_only=True)
+        self.assertEqual(state['tasks'][0]['stop_reason'], 'confirmed_no_new')
+        self.assertFalse(state['tasks'][0]['partial'])
+
+    def test_short_nonempty_page_requires_another_request(self):
+        state, collection = self.state(), FakeCollection()
+        post = raw_post()
+        api = self.run_ingest(state, collection, [[post], [post]], max_new_posts=1)
+        self.assertEqual(api.requests, 2)
+        self.assertEqual(state['tasks'][0]['first_page_count'], 1)
+        self.assertFalse(state['tasks'][0]['saturated'])
+        self.assertEqual(state['tasks'][0]['stop_reason'], 'confirmed_no_new')
+
+    def test_full_identical_tie_page_remains_unresolved(self):
+        state, collection = self.state(), FakeCollection()
+        posts = [raw_post(f'at://did:plc:one/app.bsky.feed.post/{n}') for n in range(100)]
+        for post in posts:
+            persist_post(collection, normalize_post(post, 'cargo pants', 'salt'), 100)
+        api = self.run_ingest(state, collection, [posts], cap=100, confirm_only=True)
+        task = state['tasks'][0]
+        self.assertEqual(api.requests, 1)
+        self.assertFalse(task['done'])
+        self.assertTrue(task['unresolved'])
+        self.assertEqual(task['stop_reason'], 'unresolved_full_page')
+        self.assertIsNone(task['keyset_until'])
+
+    def test_quota_guard_preserves_unseen_position_and_continues_windows(self):
+        state, collection = self.state(), FakeCollection()
+        other = dict(state['tasks'][0], term='other', seen_cursors=[])
+        state['tasks'].append(other)
+        posts = [raw_post('one'), raw_post('two')]
+        api = self.run_ingest(state, collection, [posts, []], cap=1, max_new_posts=1)
+        self.assertEqual(api.requests, 2)
+        self.assertEqual(len(collection.posts), 1)
+        task = state['tasks'][0]
+        self.assertIsNone(task['keyset_until'])
+        self.assertEqual(task['pending_unseen_count'], 1)
+        self.assertEqual(task['stop_reason'], 'new_posts_require_capacity')
+        self.assertTrue(other['done'])
+
+    def test_first_page_twenty_records_saturation(self):
+        state, collection = self.state(), FakeCollection()
+        posts = [raw_post(str(n)) for n in range(20)]
+        self.run_ingest(state, collection, [posts, []])
+        self.assertTrue(state['tasks'][0]['saturated'])
+        self.assertEqual(state['tasks'][0]['first_page_count'], 20)
+
+    def test_legacy_first_page_audit_does_not_invent_multipage_count(self):
+        state = self.state()
+        one = state['tasks'][0]
+        one.update(pages=1, returned=7, cursor='keep')
+        two = dict(one, term='other', pages=2, returned=120, equal_timestamp_boundary_risk=True)
+        state['tasks'].append(two)
+        api = self.make_client(lambda request: httpx.Response(200, json={'posts': [raw_post(str(i)) for i in range(5)]}))
+        with tempfile.TemporaryDirectory() as directory:
+            audit_first_pages(api, state, state_path=Path(directory) / 'state.json')
+        self.assertEqual(api.requests, 1)
+        self.assertEqual(one['first_page_count'], 7)
+        self.assertEqual(two['first_page_count'], 5)
+        self.assertFalse(two['saturated'])
+        requeue_verification(state)
+        self.assertEqual(two['keyset_until'], two['until'])
+        self.assertTrue(two['equal_timestamp_boundary_risk'])
+        self.assertEqual(one['cursor'], 'keep')
+
+    def test_press_seed_extension_preserves_exact_saved_window_and_cursors(self):
+        state = initial_state(['cargo pants'], datetime(2026, 1, 7, tzinfo=timezone.utc))
+        old_windows = {(t['since'], t['until']) for t in state['tasks']}
+        state['tasks'][0]['cursor'] = 'preserve'
+        added = extend_terms(state, [{'term': 'user seed', 'press_status': 'emerged', 'label': 'unknown'}])
+        new_windows = {(t['since'], t['until']) for t in state['tasks'] if t['term'] == 'user seed'}
+        self.assertEqual(added, len(old_windows))
+        self.assertEqual(new_windows, old_windows)
+        self.assertEqual(state['tasks'][0]['cursor'], 'preserve')
+
+    def test_globally_existing_other_term_is_new_term_progress(self):
+        state, collection = self.state(), FakeCollection()
+        post = raw_post()
+        persist_post(collection, normalize_post(post, 'other', 'salt'), 1)
+        api = self.run_ingest(state, collection, [[post], [post]], cap=1, confirm_only=True)
+        self.assertEqual(api.requests, 2)
+        self.assertIn('cargo pants', collection.posts[post['uri']]['terms'])
+        self.assertEqual(state['tasks'][0]['stop_reason'], 'confirmed_no_new')
+
+class FirstPagePhaseTests(unittest.TestCase):
+    make_client = RequestTests.make_client
+    state = WindowAuditTests.state
+    run_ingest = WindowAuditTests.run_ingest
+
+    def test_fresh_search_and_threads_preserve_entire_press_reserve(self):
+        budget = insertion_budget(35000, 0, 10000, pending_threads=200)
+        self.assertEqual(budget, 24000)
+        self.assertEqual(35000 - budget - 200 * 5, 10000)
+        self.assertEqual(insertion_budget(35000, 24081, 10000), 919)
+        self.assertEqual(insertion_budget(35000, 24081, 10000, press_only=True), 10919)
+        self.assertEqual(insertion_budget(35000, 35000, 10000), 0)
+    def test_two_terms_two_windows_exactly_one_page_each_fair_order(self):
+        state = initial_state(['beta', 'alpha'], datetime(2026, 1, 7, tzinfo=timezone.utc))
+        state['tasks'] = state['tasks'][:4]
+        state['tasks'] = sorted(state['tasks'], key=lambda task: task['term'])
+        state['pagination'] = 'keyset'
+        calls = []
+        def handler(request):
+            params = dict(request.url.params)
+            calls.append(params)
+            post = raw_post(params['q'] + params['since'])
+            post['record']['createdAt'] = params['since']
+            return httpx.Response(200, json={'posts': [post]})
+        collection = FakeCollection()
+        api = self.make_client(handler)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.json'
+            ingest(api, collection, state, 'salt', True, 35000, path, first_pages_only=True)
+            self.assertEqual(len(calls), 4)
+            self.assertTrue(all(call['limit'] == '20' for call in calls))
+            self.assertEqual([call['q'] for call in calls], ['"alpha"', '"beta"', '"alpha"', '"beta"'])
+            self.assertTrue(all(task['pages'] == 1 and task['partial'] and not task['done'] for task in state['tasks']))
+            ingest(api, collection, state, 'salt', True, 35000, path, first_pages_only=True)
+            self.assertEqual(len(calls), 4)
+            self.assertEqual(len(collection.posts), 4)
+
+    def test_captured_overlap_is_skipped_without_changing_its_cursor(self):
+        state = self.state()
+        overlap = dict(state['tasks'][0], term='overlap', pages=2, first_page_count=20,
+                       saturated=True, cursor='saved-cursor', keyset_until='saved-keyset', returned=120)
+        state['tasks'].append(overlap)
+        before = dict(overlap)
+        api = self.run_ingest(state, FakeCollection(), [[]], first_pages_only=True)
+        self.assertEqual(api.requests, 1)
+        self.assertEqual(overlap, before)
+
+    def test_first_page_quota_interruption_resumes_same_twenty_result_page(self):
+        state, collection = self.state(), FakeCollection()
+        posts = [raw_post('one'), raw_post('two')]
+        self.run_ingest(state, collection, [posts], cap=2, max_new_posts=1, first_pages_only=True)
+        task = state['tasks'][0]
+        self.assertTrue(task['first_page_insertion_pending'])
+        self.assertIsNone(task['keyset_until'])
+        self.run_ingest(state, collection, [posts], cap=2, max_new_posts=1, first_pages_only=True)
+        self.assertFalse(task['first_page_insertion_pending'])
+        self.assertTrue(task['first_page_ingested'])
+        self.assertEqual(task['first_page_count'], 2)
+        self.assertEqual(len(collection.posts), 2)

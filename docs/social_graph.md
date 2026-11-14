@@ -17,7 +17,7 @@ python -m unittest tests.test_social_embed tests.test_social_graph
 
 Creating the Atlas index is optional and explicit. `--index-only` creates or updates it without embedding. The index is named `social_posts_vector`, with cosine on `embedding`, 768 dimensions, and filter fields `term` and `created_at`. A build waits up to five minutes. Scripts never delete another index to free capacity. Failed embeddings are retried four times with 2, 4, and 8 second waits. CLI error reports contain only the exception class, never connection strings or provider error payloads.
 
-At the full ingest cap, embedding requires at most 25,000 successful model calls plus retry attempts. Graph enrichment requires one Atlas neighbor query per embedded post, at most 25,000 queries. `--name-limit` explicitly caps additional Claude calls. The default is zero; use a positive budget for generated names. Dollar cost was not measured and depends on current account pricing and input token counts. No model calls or Atlas writes were made during the offline unit tests.
+At the current 35,000-post cap, embedding requires at most 35,000 successful model calls plus retry attempts. Graph enrichment requires one Atlas neighbor query per embedded post, at most 35,000 queries. `--name-limit` explicitly caps additional Claude calls. The default is zero; use a positive budget for generated names. Dollar cost was not measured and depends on current account pricing and input token counts. No model calls or Atlas writes were made during the offline unit tests.
 
 ## Graph interpretation
 

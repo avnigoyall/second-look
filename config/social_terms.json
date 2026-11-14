@@ -1,5 +1,8 @@
 {
-  "description": "Labels are evaluation annotations only. Queries are quoted phrases. Counts are sampled search index results.",
+  "description": "Labels and press_status are evaluation annotations only. Queries are quoted phrases. Counts are sampled search index results.",
+  "press_seeds_pending": true,
+  "press_seed_count_expected": 10,
+  "press_seed_reserved_posts": 10000,
   "terms": [
     {"term": "cargo pants", "label": "micro"},
     {"term": "barrel jeans", "label": "micro"},

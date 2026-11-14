@@ -169,12 +169,33 @@ def claude_name(summary):
     return " ".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
 
-def name_communities(groups, summaries, cache, name_one=None, name_limit=0):
+def load_name_cache(collection, groups):
+    """Fetch current community names in one query rather than one per author group."""
+    ids = sorted({f"name:{group['id']}" for group in groups})
+    if not ids:
+        return {}
+    return {row["_id"]: row for row in collection.find(
+        {"_id": {"$in": ids}}, {"_id": 1, "community_id": 1, "name": 1, "source": 1})}
+
+
+def count_named_communities(groups, names, cached_names):
+    named = set()
+    for group in groups:
+        row = cached_names.get(f"name:{group['id']}", {})
+        name = public_name(row.get("name"))
+        if row.get("source") == "claude" and name and name == names.get(group["id"]):
+            named.add(group["id"])
+    return len(named)
+
+
+def name_communities(groups, summaries, cache, name_one=None, name_limit=0, *, cached_names=None):
     """Only successful model names are cached; fallback labels may be retried."""
     names, calls = {}, 0
     for group in groups:
         group_id = group["id"]
-        cached = cache.find_one({"_id": f"name:{group_id}"}) if cache is not None else None
+        cache_id = f"name:{group_id}"
+        cached = (cached_names.get(cache_id) if cached_names is not None else
+                  cache.find_one({"_id": cache_id}) if cache is not None else None)
         cached_name = public_name(cached.get("name")) if cached else None
         if cached_name:
             names[group_id] = cached_name
@@ -195,16 +216,18 @@ def name_communities(groups, summaries, cache, name_one=None, name_limit=0):
                 continue
             names[group_id] = name
             if cache is not None:
-                cache.update_one({"_id": f"name:{group_id}"}, {"$set": {
-                    "name": name, "community_id": group_id, "source": "claude",
-                }}, upsert=True)
+                fields = {"name": name, "community_id": group_id, "source": "claude"}
+                cache.update_one({"_id": cache_id}, {"$set": fields}, upsert=True)
+                if cached_names is not None:
+                    cached_names[cache_id] = {"_id": cache_id, **fields}
         except Exception:
             # Keep the explicit term-based fallback. Never log provider errors.
             continue
     return names, calls
 
 
-def export_graph(graph, groups, names, interaction_stats, *, max_nodes=MAX_NODES, max_edges=MAX_EDGES):
+def export_graph(graph, groups, names, interaction_stats, *, max_nodes=MAX_NODES, max_edges=MAX_EDGES,
+                 similarity_evaluated=True):
     names = {key: public_name(value) or "Unclassified discussion" for key, value in names.items()}
     max_nodes = min(MAX_NODES, max(0, max_nodes))
     membership = {author: group["id"] for group in groups for author in group["members"]}
@@ -231,22 +254,35 @@ def export_graph(graph, groups, names, interaction_stats, *, max_nodes=MAX_NODES
             "communities": [{"id": group["id"], "name": names[group["id"]], "size": group["size"]}
                             for group in groups if any(author in selected for author in group["members"])],
             "stats": {"largest_component_share_interaction": interaction_stats["largest_component_share"],
-                      "largest_component_share_with_similarity": full["largest_component_share"],
+                      "largest_component_share_with_similarity": full["largest_component_share"] if similarity_evaluated else None,
                       "isolated_authors_interaction": interaction_stats["isolated_authors"],
-                      "isolated_authors_with_similarity": full["isolated_authors"],
+                      "isolated_authors_with_similarity": full["isolated_authors"] if similarity_evaluated else None,
                       "authors": full["authors"], "exported_nodes": len(nodes),
                       "edges_before_export_cap": len(edges), "exported_edges": min(len(edges), max_edges),
                       "seed": SEED, "similarity_is_inferred": True}}
 
 
 def persist_membership(collection, groups, names, run_id):
-    collection.create_index("author_hash", unique=True)
+    from pymongo import UpdateOne
+    assignments = {}
     for group in groups:
+        fields = {"community_id": group["id"], "community_size": group["size"],
+                  "name": public_name(names[group["id"]]) or "Unclassified discussion",
+                  "graph_run_id": run_id}
         for author in group["members"]:
-            collection.update_one({"author_hash": author}, {"$set": {
-                "community_id": group["id"], "community_size": group["size"],
-                "name": public_name(names[group["id"]]) or "Unclassified discussion", "graph_run_id": run_id,
-            }}, upsert=True)
+            if author in assignments and assignments[author] != fields:
+                raise ValueError("author belongs to conflicting communities")
+            assignments[author] = fields
+    collection.create_index("author_hash", unique=True)
+    batch = []
+    for author, fields in sorted(assignments.items()):
+        batch.append(UpdateOne({"author_hash": author}, {"$set": fields}, upsert=True))
+        if len(batch) >= 500:
+            collection.bulk_write(batch, ordered=False)
+            batch = []
+    if batch:
+        collection.bulk_write(batch, ordered=False)
+    return len(assignments)
 
 
 def main():
@@ -268,19 +304,26 @@ def main():
                   "quote_author_hash": 1, "mention_author_hashes": 1, "embedding": 1,
                   "text": 1, "term": 1, "terms": 1, "like_count": 1}
     posts = list(db["social_posts"].find({}, projection))
+    if not args.interaction_only and not any(len(post.get("embedding") or []) == 768 for post in posts):
+        parser.error("No social embeddings are available. Embed posts first, or explicitly use --interaction-only.")
     base = interaction_graph(posts)
     interaction_stats = graph_stats(base)
     graph, queries = (base, 0) if args.interaction_only else add_similarity(
         base, posts, db["social_posts"].aggregate)
     groups = communities(graph)
     summaries = community_summaries(groups, posts)
+    cached_names = load_name_cache(db["social_graph_meta"], groups)
     names, calls = name_communities(groups, summaries, db["social_graph_meta"],
-                                     claude_name, args.name_limit)
+                                     claude_name, args.name_limit, cached_names=cached_names)
     run_id = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     persist_membership(db["social_communities"], groups, names, run_id)
-    output = export_graph(graph, groups, names, interaction_stats)
+    output = export_graph(graph, groups, names, interaction_stats,
+                          similarity_evaluated=not args.interaction_only)
+    named_count = count_named_communities(groups, names, cached_names)
     output["stats"].update({"neighbor_queries": queries, "naming_calls": calls,
                              "community_count": len(groups), "computed_at": run_id,
+                             "named_community_count": named_count,
+                             "fallback_community_count": len(groups) - named_count,
                              "corpus_posts": len(posts),
                              "embedded_posts": sum(len(p.get("embedding") or []) == 768 for p in posts),
                              "similarity_enabled": not args.interaction_only})

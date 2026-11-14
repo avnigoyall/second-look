@@ -14,6 +14,7 @@ const weeks = Array.from({ length: 52 }, (_, i) => ({
   count: i === 24 ? 30 : 5, corpus_count: 100, normalized: i === 24 ? 0.3 : 0.05,
   complete: true, query_coverage: i === 4 ? "unvisited" : i === 5 ? "partial" : "complete",
   corpus_query_coverage: i === 5 ? "incomplete" : "complete",
+  saturated: i === 6, counts_are_lower_bound: i === 6,
 }));
 const trends = ["cargo pants", "barrel jeans"].map(term => ({ term, weekly_counts: weeks, peak_week: weeks[24].week }));
 const graph = {
@@ -52,11 +53,22 @@ const check = (value, name) => { assert.ok(value, name); checks++; console.log("
       check(await page.locator("button, iframe").count() === 0, `no additional controls ${width}/${scheme}`);
       check(await page.locator("#curve .peak-dot").count() === 1, `peak marked ${width}/${scheme}`);
       check(await page.locator("#community-legend li").count() === 3, `named communities ${width}/${scheme}`);
+      check(await page.locator("#curve .partial-point").count() === 2, `saturated counts remain lower bounds ${width}/${scheme}`);
       check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `no horizontal overflow ${width}/${scheme}`);
       await page.locator("#term").selectOption("cargo pants");
       check(await page.locator("#term").inputValue() === "cargo pants", `dropdown works ${width}/${scheme}`);
       check(errors.length === 0, `no JS errors ${width}/${scheme}`);
       await page.screenshot({ path: path.join(shots, `social-radar-${width}-${scheme}.png`), fullPage: true });
+      if (width === 390 && scheme === "light") {
+        const edges = graph.edges;
+        graph.edges = edges.filter(edge => edge.type === "interaction");
+        graph.stats.similarity_enabled = false;
+        await page.reload();
+        await page.locator("#graph-figure").waitFor({ state: "visible" });
+        check((await page.locator("#graph-caption").innerText()).includes("observed interactions only"), "missing similarity is disclosed");
+        graph.edges = edges;
+        graph.stats.similarity_enabled = true;
+      }
       await page.close();
     }
     for (const state of ["empty", "failed"]) {

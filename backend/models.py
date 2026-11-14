@@ -228,6 +228,10 @@ class SocialWeeklyCount(BaseModel):
     complete: bool | None = None
     query_coverage: Literal["complete", "partial", "unvisited", "unknown"] | None = None
     corpus_query_coverage: Literal["complete", "incomplete"] | None = None
+    query_visited: bool | None = None
+    corpus_query_visited: bool | None = None
+    saturated: bool = False
+    counts_are_lower_bound: bool = False
 
 
 class SocialExample(BaseModel):
@@ -252,6 +256,9 @@ class SocialContext(BaseModel):
     trends_ui_url: str | None = None
     query_coverage_complete: bool | None = None
     coverage_note: str | None = None
+    saturated_week_share: float | None = None
+    saturation_confidence_cap: Literal["medium"] | None = None
+    counts_are_lower_bound: bool = False
 
 
 class AnalyzeResponse(BaseModel):

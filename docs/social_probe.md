@@ -3,7 +3,7 @@
 Checked: 2026-11-14T22:22:41.374550Z
 
 Host: api.bsky.app, unauthenticated. Every actual API request, including HTTP retries, counts toward the 20-request probe budget. Offline connection failures are reported separately.
-API requests used: 19. Offline connection failures: 4.
+API requests used: 19. Offline connection failures: 5.
 
 | Endpoint | Passed | Status |
 | --- | --- | --- |

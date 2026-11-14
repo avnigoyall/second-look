@@ -12,7 +12,23 @@ Run commands from the repository root on feat/social-radar. Keep the current loc
 .venv/bin/python scripts/social_ingest.py --max-minutes 90
 ```
 
-The probe has a cumulative 20-request budget. Read docs/social_probe.md before changing an endpoint or retrying a failed pagination mode. Ingest stores resumable state in ignored .social_runs/. It runs at one request per second, backs off on HTTP 429 and stops at 25000 unique posts. The first pass spreads requests across terms and weekly windows. Thread enrichment adds observed interactions and is excluded from frequency metrics.
+The probe has a cumulative 20-request budget. Read docs/social_probe.md before changing an endpoint or retrying a failed pagination mode. Ingest stores resumable state in ignored .social_runs/. It runs at one request per second, backs off on HTTP 429 and stops at 35000 unique posts. The first pass spreads requests across terms and weekly windows. Thread enrichment adds observed interactions and is excluded from frequency metrics. Non-press collection reserves 10000 slots for the ten press seeds, including during thread enrichment.
+
+To recover missing first-page metadata and confirm old windows without adding posts:
+
+```sh
+.venv/bin/python scripts/social_ingest.py --audit-first-pages --confirm-only --new-post-budget 0 --skip-threads --max-minutes 40
+```
+
+Confirmation is permitted at the cap. New unseen posts cannot be silently skipped: those windows keep their continuation position. Timestamp overlap includes the oldest post plus one microsecond and uses URI deduplication. An empty or safely deduplicated confirmation can finish a window. A short page alone cannot. Repeated full duplicate pages remain unresolved.
+
+When the exact press rows are supplied, preserve their press_status and sources in the terms file. First collect one page per press term/window with --press-only --first-pages-only --skip-threads. Then deepen saturated windows for those exact terms and quarter zip with repeatable --term arguments, --deepen-saturated --reserve-posts 0 --skip-threads. The shared cap remains 35000. Missing seeds are not invented.
+
+Thread enrichment fetches the top 200 searched posts by reply count within a cumulative 400-request budget. At most five new posts per thread are stored, reserving space for all 200 threads under the corpus cap. The quality report counts truncated threads and skipped posts. To resume only enrichment after a safely stopped search, run:
+
+```sh
+.venv/bin/python scripts/social_ingest.py --threads-only --max-minutes 15
+```
 
 Read docs/social_quality.md after collection. If the corpus has fewer than 3000 posts, wait for the user's response before running the graph command. Do not use --allow-small-corpus without explicit approval.
 
@@ -28,9 +44,10 @@ New ingestion uses six fractional digits and UTC Z on every stored timestamp. Th
 
 ```sh
 .venv/bin/python scripts/social_embed.py --dry-run
-.venv/bin/python scripts/social_embed.py --limit 25000 --workers 4 --create-index
+.venv/bin/python scripts/social_embed.py --limit 35000 --workers 2 --create-index
 .venv/bin/python scripts/social_graph.py --name-limit 50
 .venv/bin/python scripts/social_metrics.py --calibrate
+.venv/bin/python scripts/eval_social.py --prepare-only
 .venv/bin/python scripts/eval_social.py
 ```
 
@@ -38,7 +55,17 @@ Embedding makes one model request per post, with bounded concurrent calls and re
 
 Graph edges distinguish observed interactions from inferred semantic similarity. Communities are estimates, not Bluesky-provided groups. The export contains at most 1500 authors and 15000 edges. Community naming is cached and bounded by --name-limit. Read docs/social_graph.md for graph interpretation.
 
+If embedding credentials are unavailable, an explicit interaction-only graph can still be inspected:
+
+```sh
+.venv/bin/python scripts/social_graph.py --interaction-only --name-limit 50
+```
+
+This fallback leaves similarity comparison statistics null and labels the graph as observed interactions only. Generated and fallback community-name counts are separate. It does not complete the semantic graph or retrieval evaluation. The query preparation command can generate the 30 held-out Claude paraphrases without embeddings, but preparation is not a retrieval benchmark.
+
 Metrics keep empty and incomplete weeks distinct. Missing or truncated query coverage suppresses confident momentum and decay. Evaluation labels tune numeric thresholds only when enough annotated terms are eligible. They are never classifier inputs. Evaluation writes docs/eval_social.md and ignored local JSON artifacts. The report marks missing measurements explicitly.
+
+Saturated first pages are lower-bound counts. Saturation in more than 25 percent of all observation weeks caps confidence at medium, including partial boundary weeks in the denominator. Missing saturation metadata also caps confidence until audited. A coverage note explains these limits. --preview-momentum computes a recent eight-week sample comparison without database or configuration writes; it does not relax the published momentum policy.
 
 ## Run the backend
 

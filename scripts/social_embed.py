@@ -76,6 +76,41 @@ def provider_status(error):
     return None
 
 
+_REASON_CATEGORIES = {
+    "API_KEY_INVALID": "credential", "API_KEY_EXPIRED": "credential",
+    "API_KEY_HTTP_REFERRER_BLOCKED": "credential", "API_KEY_IP_ADDRESS_BLOCKED": "credential",
+    "CREDENTIALS_MISSING": "credential", "ACCESS_TOKEN_EXPIRED": "credential",
+    "API_KEY_SERVICE_BLOCKED": "permission", "ACCESS_TOKEN_SCOPE_INSUFFICIENT": "permission",
+    "SERVICE_DISABLED": "permission", "FREE_TIER_VERIFICATION_REQUIRED": "permission",
+    "BILLING_DISABLED": "billing", "BILLING_NOT_ACTIVE": "billing",
+    "QUOTA_EXCEEDED": "quota", "RATE_LIMIT_EXCEEDED": "quota",
+    "CONTENT_BLOCKED": "content", "SAFETY": "content",
+}
+
+
+def provider_diagnostics(error):
+    """Read structured reasons only; never expose provider messages or metadata."""
+    seen, pending = set(), [error]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        details = [getattr(current, "details", None)]
+        while details:
+            value = details.pop()
+            if isinstance(value, dict):
+                reason = value.get("reason")
+                if isinstance(reason, str) and reason in _REASON_CATEGORIES:
+                    return {"category": _REASON_CATEGORIES[reason], "reason": reason}
+                details.extend(child for child in value.values() if isinstance(child, (dict, list)))
+            elif isinstance(value, list):
+                details.extend(child for child in value if isinstance(child, (dict, list)))
+        pending.extend(value for value in (current.__cause__, current.__context__) if value is not None)
+    code = provider_status(error)
+    return {"category": {401: "credential", 402: "billing", 403: "permission", 429: "quota"}.get(code, "unknown")}
+
+
 class EmbeddingJobStopped(RuntimeError):
     """Safe failure metadata and already-persisted progress, without provider text."""
     def __init__(self, report, failure):
@@ -83,24 +118,38 @@ class EmbeddingJobStopped(RuntimeError):
         self.report = dict(report)
         self.status_code = failure["code"]
         self.provider_error_type = failure["error_type"]
+        self.provider_diagnostics = failure["diagnostics"]
+
+
+def safe_error_report(exc):
+    error = {"status": "failed", "error_type": type(exc).__name__}
+    code = provider_status(exc)
+    if code is not None:
+        error["code"] = code
+    if isinstance(exc, EmbeddingJobStopped):
+        error.update(progress=exc.report, provider_error_type=exc.provider_error_type,
+                     diagnostics=exc.provider_diagnostics)
+    else:
+        error["diagnostics"] = provider_diagnostics(exc)
+    return error
 
 
 def embed_posts(collection, embed_one, *, limit=1000, batch_size=32, workers=4,
-                attempts=4, sleep=time.sleep):
+                attempts=4, sleep=time.sleep, transient_403_retries=0):
     """Persist each success immediately; failures remain eligible on the next run.
 
     Do not send a list of posts as Gemini contents: that produces one merged
     multimodal vector with this model rather than one vector per post.
     """
-    if limit < 0 or batch_size < 1 or workers < 1 or attempts < 1:
+    if limit < 0 or batch_size < 1 or workers < 1 or attempts < 1 or transient_403_retries < 0:
         raise ValueError("invalid embedding budget")
     report = {"attempted": 0, "embedded": 0, "failed": 0, "model_calls": 0,
               "model": MODEL, "dimensions": DIMENSIONS}
     stop = Event()
 
     def one(post):
-        calls = 0
-        for attempt in range(attempts):
+        calls, retries_403, transient_failures = 0, 0, 0
+        while True:
             if stop.is_set():
                 return post, None, None, calls
             try:
@@ -112,14 +161,21 @@ def embed_posts(collection, embed_one, *, limit=1000, batch_size=32, workers=4,
                 return post, [v / norm for v in vector], None, calls
             except Exception as exc:
                 code = provider_status(exc)
-                failure = {"code": code, "error_type": type(exc).__name__,
+                failure = {"code": code, "error_type": type(exc).__name__, "diagnostics": provider_diagnostics(exc),
                            "fatal": code is not None and 400 <= code < 500 and code not in (408, 409, 429)}
+                # Explicit opt-in only: 403 normally indicates a permanent client
+                # error. This budget is for a measured intermittent provider issue.
+                if code == 403 and retries_403 < transient_403_retries:
+                    retries_403 += 1
+                    sleep(2 ** retries_403)
+                    continue
                 if failure["fatal"]:
                     stop.set()
                     return post, None, failure, calls
-                if attempt + 1 < attempts:
-                    sleep(2 ** (attempt + 1))
-        return post, None, failure, calls
+                transient_failures += 1
+                if transient_failures >= attempts:
+                    return post, None, failure, calls
+                sleep(2 ** transient_failures)
 
     cursor = collection.find(PENDING, {"uri": 1, "text": 1}).sort("uri", 1).limit(limit)
     batch = []
@@ -175,22 +231,26 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--create-index", action="store_true")
     parser.add_argument("--index-only", action="store_true")
+    parser.add_argument("--transient-403-retries", type=int, default=0,
+                        help="Explicit opt-in for measured intermittent 403s; retries per post, default 0")
     args = parser.parse_args()
-    if args.limit < 0 or args.workers < 1 or args.batch_size < 1:
+    if args.limit < 0 or args.workers < 1 or args.batch_size < 1 or args.transient_403_retries < 0:
         parser.error("limit must be nonnegative, workers and batch-size positive")
     from backend.db import db
     posts = db["social_posts"]
     report = {"pending": posts.count_documents(PENDING), "limit": args.limit}
     report.update(planned_posts=min(report["pending"], args.limit),
                   model=MODEL, dimensions=DIMENSIONS,
-                  maximum_model_calls=min(report["pending"], args.limit) * 4)
+                  transient_403_retries=args.transient_403_retries,
+                  maximum_model_calls=min(report["pending"], args.limit) * (4 + args.transient_403_retries))
     if args.dry_run:
         print(json.dumps(report))
         return
     if not args.index_only:
         from backend.services.embeddings import embed_text
         report.update(embed_posts(posts, embed_text, limit=args.limit,
-                                  workers=args.workers, batch_size=args.batch_size))
+                                  workers=args.workers, batch_size=args.batch_size,
+                                  transient_403_retries=args.transient_403_retries))
     if args.create_index or args.index_only:
         report["index_ready"] = ensure_vector_index(posts)
     print(json.dumps(report))
@@ -201,11 +261,5 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         # Provider exceptions can contain request text or credentials.
-        error = {"status": "failed", "error_type": type(exc).__name__}
-        code = provider_status(exc)
-        if code is not None:
-            error["code"] = code
-        if isinstance(exc, EmbeddingJobStopped):
-            error.update(progress=exc.report, provider_error_type=exc.provider_error_type)
-        print(json.dumps(error), file=sys.stderr)
+        print(json.dumps(safe_error_report(exc)), file=sys.stderr)
         sys.exit(1)

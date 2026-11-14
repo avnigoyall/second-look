@@ -1,14 +1,15 @@
 # Social Radar evaluation
 
-Status: unmeasured.
+Status: prepared.
 
-Generated at: 2026-11-14T22:33:31.641972Z.
+Generated at: 2026-11-14T23:08:57.330297Z.
 
 | Measurement | Result |
 | --- | --- |
-| Corpus posts | 7312 |
+| Corpus posts | 24081 |
 | Embedded posts | 0 |
-| Held-out queries | unmeasured |
+| Prepared Claude queries | 30 |
+| Evaluated held-out queries | 0 |
 | Successful lookups | unmeasured |
 | Lookup errors | unmeasured |
 | Recall@5 | unmeasured |
@@ -16,8 +17,8 @@ Generated at: 2026-11-14T22:33:31.641972Z.
 | MRR@30 | unmeasured |
 | Lookup p50 (ms) | unmeasured |
 | Lookup p95 (ms) | unmeasured |
-| Weighted cluster purity by term | unmeasured |
-| Assigned post share | 0.0000 |
+| Weighted cluster purity by term | 0.8260 |
+| Assigned post share | 1.0000 |
 
 Staples and micro-trends do not separate reliably in this sample.
 
@@ -70,7 +71,8 @@ Staples and micro-trends do not separate reliably in this sample.
 Method and limits:
 
 - Originals stay indexed as retrieval targets. Claude generates differently worded queries once; queries are held out from threshold calibration. This tests instance retrieval, not unseen-trend prediction.
-- Seed 42 selects up to 30 term-balanced posts with text and embeddings. Thirty queries are a small sample. Provider failures count as misses. MRR is truncated at the 30 retrieved results.
+- Prepare independently with `.venv/bin/python scripts/eval_social.py --prepare-only`. Run `.venv/bin/python scripts/eval_social.py` after embedding the targets to evaluate the cached queries.
+- Seed 42 selects up to 30 term-balanced text posts. Preparation can run before embeddings exist; prepared queries are not a completed retrieval benchmark. Evaluation requires the targets to be embedded. Thirty queries are a small sample. Provider failures count as misses. MRR is truncated at the 30 retrieved results.
 - Latency includes successful uncached embedding plus Atlas search. It excludes Claude paraphrase time and /analyze verdict time. Timeout failures do not count as successful fast lookups.
 - Only a 12-month window is observed. first_seen_in_window is not the trend origin.
 - Counts are samples from a search index and may be capped, never platform totals. Quoted terms, uneven coverage, language, spam, missing accounts and search ranking bias the sample.
@@ -78,4 +80,8 @@ Method and limits:
 - Staple and micro annotations are evaluation-only and noisy. Any threshold calibration is in-sample term comparison, not held-out classification accuracy. Report overlap plainly.
 - No author handles or raw post text appear in this report. Queries and source URIs remain in ignored local files.
 
-Unverified: No embedded posts available. Retrieval and latency remain unmeasured.
+Unverified: Claude queries prepared or reused. No Gemini embeddings or vector lookups were executed; recall, MRR and lookup latency remain unmeasured.
+
+## Press versus graph comparison
+
+Awaiting the requested 10 user-supplied press_status seed rows; 0 are present. No missing terms, press statuses, sources or dates have been invented.

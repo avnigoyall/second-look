@@ -1,5 +1,7 @@
 """Offline numeric metrics and bounded runtime retrieval tests. No Bluesky requests."""
 import os
+import io
+import json
 import threading
 import time
 import unittest
@@ -7,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from backend.services import social as s
-from scripts.social_metrics import calibrate, separation_report
+from contextlib import redirect_stdout
+from scripts.social_metrics import calibrate, separation_report, main as metrics_main
 
 START = datetime(2026, 1, 5, tzinfo=timezone.utc)
 
@@ -116,7 +119,7 @@ class MetricsTests(unittest.TestCase):
     def complete_coverage(self, terms=("cargo pants",), weeks=12):
         return {"tasks": [{"term": term, "since": s.iso(START + timedelta(weeks=w)),
                            "until": s.iso(START + timedelta(weeks=w + 1)), "pages": 1,
-                           "done": True, "stop_reason": "no_cursor"}
+                           "done": True, "stop_reason": "no_cursor", "first_page_count": 10, "saturated": False}
                           for term in terms for w in range(weeks)]}
 
     def test_unvisited_term_window_is_not_zero_activity(self):
@@ -186,6 +189,136 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(report["calibration_applied"])
         self.assertFalse(report["separates"])
         self.assertIn("do not separate", report["interpretation"])
+
+    def test_saturation_above_quarter_caps_high_confidence_at_medium(self):
+        rows = [post(f"{w}-{i}", week=w) for w in range(16) for i in range(40)]
+        coverage = self.complete_coverage(weeks=16)
+        for task in coverage["tasks"][:5]:
+            task.update(first_page_count=20, saturated=True)
+        result = self.metrics(rows, weeks=16, coverage=coverage)[0]
+        self.assertEqual(result["confidence"], "medium")
+        self.assertEqual(result["saturated_week_share"], 5 / 16)
+        self.assertEqual(result["saturation_confidence_cap"], "medium")
+        self.assertEqual(result["saturated_windows"], 5)
+        self.assertEqual(result["completed_windows"], 16)
+        self.assertTrue(result["weekly_counts"][0]["counts_are_lower_bound"])
+        self.assertIn("capped at medium", result["coverage_note"])
+
+    def test_exactly_quarter_saturated_does_not_cap_high_confidence(self):
+        rows = [post(f"{w}-{i}", week=w) for w in range(16) for i in range(40)]
+        coverage = self.complete_coverage(weeks=16)
+        for task in coverage["tasks"][:4]:
+            task.update(first_page_count=20, saturated=True)
+        result = self.metrics(rows, weeks=16, coverage=coverage)[0]
+        self.assertEqual(result["confidence"], "high")
+        self.assertEqual(result["saturated_week_share"], .25)
+        self.assertIsNone(result["saturation_confidence_cap"])
+        self.assertTrue(result["weekly_counts"][0]["counts_are_lower_bound"])
+
+    def test_unknown_saturation_cannot_silently_allow_high_confidence(self):
+        rows = [post(f"{w}-{i}", week=w) for w in range(16) for i in range(40)]
+        coverage = self.complete_coverage(weeks=16)
+        coverage["tasks"][0].pop("first_page_count")
+        coverage["tasks"][0].pop("saturated")
+        result = self.metrics(rows, weeks=16, coverage=coverage)[0]
+        self.assertTrue(result["query_coverage_complete"])
+        self.assertEqual(result["confidence"], "medium")
+        self.assertEqual(result["saturation_unknown_windows"], 1)
+        self.assertEqual(result["saturation_confidence_cap"], "medium")
+        self.assertIn("until saturation metadata is verified", result["coverage_note"])
+
+    def test_saturation_denominator_includes_both_partial_boundary_weeks(self):
+        start = START + timedelta(days=2)
+        end = start + timedelta(days=365)
+        windows = []
+        week = s.monday(start)
+        while week < end:
+            windows.append((max(start, week), min(end, week + timedelta(days=7))))
+            week += timedelta(days=7)
+        self.assertEqual(len(windows), 53)
+        tasks = [{"term": "cargo pants", "since": s.iso(left), "until": s.iso(right), "pages": 1,
+                  "done": True, "stop_reason": "confirmed_empty", "first_page_count": 10, "saturated": False}
+                 for left, right in windows]
+        for task in tasks[1:14]:
+            task.update(first_page_count=20, saturated=True)
+        rows = [post(f"{w}-{i}", week=w) for w in range(1, 52) for i in range(40)]
+        result = s.compute_trends(rows, start=start, end=end, coverage={"tasks": tasks})[0]
+        self.assertEqual(result["calendar_complete_weeks"], 51)
+        self.assertEqual(result["saturation_week_denominator"], 53)
+        self.assertEqual(result["saturated_week_share"], 13 / 53)
+        self.assertEqual(result["confidence"], "high")
+        self.assertIsNone(result["saturation_confidence_cap"])
+        for task in (tasks[0], tasks[-1]):
+            task.update(first_page_count=20, saturated=True)
+        result = s.compute_trends(rows, start=start, end=end, coverage={"tasks": tasks})[0]
+        self.assertEqual(result["saturated_week_share"], 15 / 53)
+        self.assertEqual(result["confidence"], "medium")
+        self.assertEqual(result["saturation_confidence_cap"], "medium")
+        self.assertIn("including partial boundary weeks", result["coverage_note"])
+
+    def test_confirmed_exhaustion_preserves_saturation_lower_bound(self):
+        coverage = self.complete_coverage(weeks=12)
+        for task in coverage["tasks"]:
+            task.update(stop_reason="confirmed_empty", first_page_count=20, saturated=True)
+        rows = [post(f"{w}-{i}", week=w) for w in range(12) for i in range(10)]
+        result = self.metrics(rows, coverage=coverage)[0]
+        self.assertTrue(result["query_coverage_complete"])
+        self.assertTrue(all(w["counts_are_lower_bound"] for w in result["weekly_counts"]))
+        task = coverage["tasks"][0]
+        task.update(stop_reason="confirmed_no_new")
+        self.assertEqual(s.query_window_coverage([task], s.utc(task["since"]), s.utc(task["until"])), "complete")
+        task.update(unresolved=True)
+        self.assertEqual(s.query_window_coverage([task], s.utc(task["since"]), s.utc(task["until"])), "partial")
+
+    def test_preview_can_measure_recent_sample_without_publishing_policy_change(self):
+        coverage = self.complete_coverage()
+        for task in coverage["tasks"]:
+            task.update(done=False, stop_reason=None, first_page_count=20, saturated=True)
+        rows = []
+        for w in range(12):
+            for i in range(100):
+                rows.append(post(f"{w}-{i}", week=w, term="cargo pants" if i < (10 if w < 8 else 40) else "chinos"))
+        coverage["tasks"] += [{**t, "term": "chinos"} for t in coverage["tasks"]]
+        metrics = self.metrics(rows, coverage=coverage)
+        preview = s.preview_recent_momentum(metrics)
+        cargo = next(r for r in preview["terms"] if r["term"] == "cargo pants")
+        self.assertEqual(cargo["published_momentum"], "unknown")
+        self.assertEqual(cargo["proposed_recent_momentum"], "rising")
+        self.assertEqual(cargo["proposed_confidence"], "low")
+        self.assertIsNone(cargo["historical_decay_ratio_unchanged"])
+        self.assertFalse(preview["published_policy_changed"])
+        self.assertTrue(all(m["momentum"] == "unknown" for m in metrics))
+
+    def test_preview_never_treats_unvisited_or_partial_zero_as_observed_absence(self):
+        base = {"week": "2026-01-05", "complete": True, "query_visited": True,
+                "corpus_query_visited": True, "count": 20, "corpus_count": 100,
+                "normalized": .2, "query_coverage": "partial", "counts_are_lower_bound": True}
+        for change in ({"count": 0, "normalized": 0}, {"query_visited": False}, {"corpus_query_visited": False}):
+            weekly = [dict(base) for _ in range(8)]
+            weekly[0].update(change)
+            preview = s.preview_recent_momentum([{"term": "cargo pants", "momentum": "unknown", "weekly_counts": weekly}])
+            self.assertEqual(preview["proposed_non_unknown"], 0)
+
+    def test_preview_cli_never_writes_database_or_config(self):
+        posts, communities, trends = mock.Mock(), mock.Mock(), mock.Mock()
+        posts.find.return_value = [post(w, week=w) for w in range(12)]
+        communities.find.return_value = []
+        state = {**self.complete_coverage(), "window_start": s.iso(START),
+                 "window_end": s.iso(START + timedelta(weeks=12))}
+        cfg = s.momentum_config()
+        output = io.StringIO()
+        with mock.patch("backend.db.db", {"social_posts": posts, "social_communities": communities,
+                                           "social_trends": trends}), \
+                mock.patch("scripts.social_metrics.load_labels", return_value={"cargo pants": "micro"}), \
+                mock.patch("scripts.social_metrics.Path.exists", return_value=True), \
+                mock.patch("scripts.social_metrics.Path.read_text", return_value=json.dumps(state)), \
+                mock.patch("scripts.social_metrics.momentum_config", return_value=cfg), \
+                mock.patch("scripts.social_metrics.Path.write_text") as write_config, redirect_stdout(output):
+            self.assertEqual(metrics_main(["--preview-momentum"]), 0)
+        trends.create_index.assert_not_called()
+        trends.update_one.assert_not_called()
+        write_config.assert_not_called()
+        self.assertTrue(json.loads(output.getvalue())["dry_run"])
 
 
 class RetrievalTests(unittest.TestCase):

@@ -21,7 +21,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_STATE = ROOT / ".social_runs" / "ingest_state.json"
 sys.path.insert(0, str(ROOT))
-from backend.services.social import CONFIG_PATH, compute_trends, momentum_config, utc  # noqa: E402
+from backend.services.social import (CONFIG_PATH, compute_trends, momentum_config, preview_recent_momentum,
+                                     query_window_coverage, query_window_visited, task_saturated,
+                                     task_saturation_known, utc)  # noqa: E402
+
+
+def coverage_audit(state):
+    """Read local cursor metadata without a database, text, accounts or credentials."""
+    tasks = state.get("tasks", [])
+    rows = []
+    for term in sorted({t["term"] for t in tasks}):
+        group = [t for t in tasks if t["term"] == term]
+        rows.append({"term": term, "total_windows": len(group),
+                     "completed_windows": sum(query_window_coverage([t], utc(t["since"]), utc(t["until"])) == "complete"
+                                              for t in group),
+                     "visited_windows": sum(query_window_visited([t], utc(t["since"]), utc(t["until"])) for t in group),
+                     "saturated_windows": sum(task_saturated(t) for t in group),
+                     "saturation_metadata_windows": sum(task_saturation_known(t) for t in group),
+                     "saturation_unknown_windows": sum(not task_saturation_known(t) for t in group),
+                     "legacy_boundary_risk_windows": sum(bool(t.get("equal_timestamp_boundary_risk")) for t in group)})
+    return {"window_start": state.get("window_start"), "window_end": state.get("window_end"),
+            "terms": rows, "writes": False,
+            "strict_policy_note": "Any incomplete complete-calendar term or corpus window keeps published momentum "
+                                  "unknown. A single unresolved corpus term can therefore affect every term."}
 
 
 def load_labels(path=ROOT / "config" / "social_terms.json") -> dict[str, str]:
@@ -100,10 +122,20 @@ def main(argv=None) -> int:
                         help="Ingest cursor state for exact observation window and term/week search coverage")
     parser.add_argument("--dry-run", action="store_true", help="Compute and report without database or config writes")
     parser.add_argument("--calibrate", action="store_true", help="Evaluate labels and tune a numeric cutoff if eligible")
+    parser.add_argument("--preview-momentum", action="store_true",
+                        help="Read-only recent-eight-week proposal; no DB/config writes or published policy change")
+    parser.add_argument("--coverage-audit", action="store_true", help="Audit local cursor state only, with no DB access")
     args = parser.parse_args(argv)
+    if args.preview_momentum and args.calibrate:
+        parser.error("--preview-momentum cannot be combined with --calibrate")
+    if args.preview_momentum:
+        args.dry_run = True
     try:
-        from backend.db import db
         state = json.loads(args.state.read_text()) if args.state.exists() else {}
+        if args.coverage_audit:
+            print(json.dumps(coverage_audit(state), indent=2))
+            return 0
+        from backend.db import db
         end = utc(args.end or state.get("window_end") or datetime.now(timezone.utc))
         start = utc(args.start or state.get("window_start") or end - timedelta(days=365))
         # Inspect/read existing social collections only. Other collections are untouched.
@@ -128,6 +160,8 @@ def main(argv=None) -> int:
         print(json.dumps({"terms": len(metrics), "corpus_posts": len(posts), "dry_run": args.dry_run,
                           "coverage_state_available": bool(state.get("tasks")),
                           "terms_with_complete_query_coverage": sum(m["query_coverage_complete"] for m in metrics),
+                          "non_unknown_momentum": sum(m["momentum"] != "unknown" for m in metrics),
+                          "momentum_preview": preview_recent_momentum(metrics, cfg) if args.preview_momentum else None,
                           "evaluation": evaluation,
                           "metrics": [{k: v for k, v in m.items() if k != "weekly_counts"} for m in metrics]}, indent=2))
         return 0

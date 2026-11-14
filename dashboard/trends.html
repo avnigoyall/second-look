@@ -225,7 +225,10 @@
       row.append(swatch, name); legend.append(row);
     }
     $("graph-summary").textContent = nodes.length.toLocaleString() + " hashed authors shown across " + groups.length.toLocaleString() + " discussion communities.";
-    $("graph-caption").textContent = "Each dot is a hashed author. Up to 1,500 authors and 15,000 links are shown. Community sizes refer to the full graph. Similarity links are inferred, not observed interactions; layout distance does not measure influence.";
+    const semanticNote = data.stats?.similarity_enabled === false
+      ? "This graph uses observed interactions only; text similarity has not been computed."
+      : "Similarity links are inferred, not observed interactions.";
+    $("graph-caption").textContent = "Each dot is a hashed author. Up to 1,500 authors and 15,000 links are shown. Community sizes refer to the full graph. " + semanticNote + " Layout distance does not measure influence.";
     $("graph-message").hidden = true; $("graph-figure").hidden = false; $("graph-panel").setAttribute("aria-busy", "false");
     drawGraph();
   }
@@ -240,7 +243,7 @@
     svg.setAttribute("viewBox", "0 0 " + chartWidth + " 300");
     const safeTerm = clean(trend.term), title = text("title", "Weekly Bluesky sample share for " + safeTerm, {id: "curve-title"});
     const valid = row => ["complete", "partial"].includes(row.query_coverage) && Number(row.corpus_count) > 0 && Number.isFinite(row.normalized) && row.normalized >= 0;
-    const complete = row => valid(row) && row.complete === true && row.query_coverage === "complete" && row.corpus_query_coverage === "complete";
+    const complete = row => valid(row) && row.complete === true && row.query_coverage === "complete" && row.corpus_query_coverage === "complete" && !row.saturated && !row.counts_are_lower_bound;
     const observed = rows.filter(valid), fullCount = rows.filter(complete).length, partialCount = observed.length - fullCount, gapCount = rows.length - observed.length;
     svg.append(title, text("desc", "A normalized weekly sample estimate. " + fullCount + " fully covered weeks and " + partialCount + " partial sample weeks are plotted. Dashed segments and hollow points mean incomplete sampling. " + gapCount + " unvisited or unknown weeks are gaps.", {id: "curve-description"}));
     const left = 48, right = chartWidth - 16, top = 40, bottom = 252;
@@ -276,7 +279,7 @@
         "text-anchor": xp > right - 150 ? "end" : xp < left + 100 ? "start" : "middle", class: "peak-label"}));
     }
     if (!observed.length) svg.append(text("text", "No observed weeks to plot", {x: (left + right) / 2, y: (top + bottom) / 2, "text-anchor": "middle"}));
-    $("curve-caption").textContent = "Estimate for " + safeTerm + ". " + fullCount + " fully covered weeks; " + partialCount + " partial sample weeks (hollow points, dashed lines); " + gapCount + " unvisited or unknown weeks (gaps). Shares use that week's collected corpus, which may be incomplete. " + (peakIndex >= 0 ? "The sample peak is within this observation window, not the origin." : "No sample peak is available in the observed weeks.");
+    $("curve-caption").textContent = "Estimate for " + safeTerm + ". " + fullCount + " fully covered weeks; " + partialCount + " partial or lower-bound sample weeks (hollow points, dashed lines); " + gapCount + " unvisited or unknown weeks (gaps). Saturated first pages give lower-bound counts. Shares use that week's collected corpus, which may be incomplete. " + (peakIndex >= 0 ? "The sample peak is within this observation window, not the origin." : "No sample peak is available in the observed weeks.");
     const url = new URL(location.href); url.searchParams.set("term", trend.term); history.replaceState(null, "", url);
   }
   function loadTrends(data) {
