@@ -159,8 +159,19 @@ Stored document (`TrendDoc`, validated for both seed file and agent output)
 
 ## 7. Verdicts (Part 5)
 
-### Current code `[STUB]`
-`POST /analyze` takes `{item: Item}` and cycles through the three verdicts by the user's verdict count. It never calls Parts 2, 3 or 4. Matched closet item is the user's oldest item, matched trend is the first trend by `_id`. `attributes` is stored as null.
+### Engine `[BUILT]` (Part 5, `backend/services/verdict.py`)
+`POST /analyze` takes `{item: Item}` and calls `decide(user, item, save=True)`. The stub cycling is gone. `decide(user, item, save=False)` runs the same path read-only (used by `scripts/eval_verdicts.py`).
+- `Item` gains optional `description` (max 20000) and `breadcrumb` (max 2000). The extension reads them from JSON-LD Product or BreadcrumbList, with og/meta description and breadcrumb nav as fallbacks (`extension/src/content/reader/details.js`).
+- Attributes: Part 2 `understand_target_item()` in-process through `backend/services/verdict_deps.py` (the engine's only link to Fix A and Fix B). `target_crop` is stored on the verdict doc.
+- Signals in code: `find_matches(user, attrs, k=5)` and the category-filtered `get_trends_for_prompt()` run in parallel. Best match = highest score among color-compatible matches. `t_c = clamp(user.look_thresholds[category] or look_similarity, 0.70, 0.92)`, `gray_margin` 0.04 in `config/thresholds.json`. Zones: `forced` at `t_c + margin` or above, `gray` within the margin, `none` below.
+- Allowed set in code: have_this_look only in forced or gray (forced allows nothing else). micro_trend only when a filtered trend has `lifespan_bucket == "short"`. good_buy always.
+- Claude call: `CLAUDE_MODEL` (`claude-haiku-5-5`), forced tool use with `strict: true`, `output_config.effort: "low"`, thinking disabled. No temperature: the API rejects it ("Extra inputs are not permitted"). Images (target crop, top 1 or 2 closet photos) only in the gray zone. The tool enum always lists all three verdicts (a fixed strict schema avoids a one-time schema compile of about 4 s), and the allowed set is enforced in code. Forced `tool_choice` returns 400 on Opus 5.5 and Sonnet 5.5, so a model change needs `auto`.
+- Guardrails in code: a verdict outside the allowed set is downgraded in priority order with a template reason; matched ids not in the provided matches are dropped; have_this_look with no valid ids downgrades (in the forced zone the best match is filled in instead); micro_trend needs `matched_trend_name` in the list; reasons over 30 words become a template; a small closet with no matches must say "I don't see this in your closet". Every change is logged in `override {rule, code_said, claude_said}` (the first) and `overrides` (all).
+- Timing: attempt 1 times out at 6 s, the retry at 4 s, then a code-only verdict (`decided_by: "fallback"`). Measured: 3 to 4 s typical (attributes 0.8 to 1.5 s, matches and trends about 0.3 s, Claude 1.6 to 2.4 s), above the 3 s target. Worst case: attributes time plus 10 s. The extension times out `/analyze` at 12 s and shows "Second look unavailable".
+- Code-only paths (never an error to the shopper): attributes failed, embedding or Atlas error, both Claude attempts failed. Not apparel: good_buy, reason "This isn't clothing, so there's nothing to compare it with."
+- Wears: `config/wears.json` category averages, marked unverified. `expected_wears`, `cost_per_wear` and `wears_estimated: true` on good_buy only. The card labels them "Estimate".
+- Alternatives on micro_trend only, from `alternatives_for_trend(matched_trend)`.
+- The "no number without a cited source" reason rule is in the prompt only, not enforced in code.
 
 Response (`AnalyzeResponse`, `[BUILT]`, the extension depends on it):
 ```json
@@ -170,26 +181,23 @@ Response (`AnalyzeResponse`, `[BUILT]`, the extension depends on it):
   "alternatives": [{ "name": "string", "url": "string (required, non-empty, Fix B)", "price": 48.0, "reason": "string|null",
                      "store": "string|null", "link_kind": "product | search (default product)" }],
   "outfits": [{ "name": "string", "closet_item_ids": [] }],
-  "expected_wears": "int|null", "cost_per_wear": "float|null" }
+  "expected_wears": "int|null", "cost_per_wear": "float|null",
+  "matched_closet_items": "up to 3 ClosetItem with image_data, best first (have_this_look only). matched_closet_item is the first",
+  "decided_by": "code | claude | fallback", "closet_small": "bool (fewer than 10 closet items)",
+  "zone": "forced | gray | none | null (null: matching did not run, say nothing about ownership)",
+  "wears_estimated": "bool" }
 ```
-Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_item_id, matched_trend_id, alternatives, expected_wears, action none|skipped|bought, feedback none|up|down, created_at`, plus optional `target_crop` (Fix A, not returned by `/dashboard`).
-The stub's micro_trend alternatives now come from `alternatives_for_trend(matched_trend)`. Old verdict docs with a null alternative url get a store search link when `/dashboard` reads them.
+Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_item_id, matched_trend_id, alternatives, expected_wears, action none|skipped|bought, feedback none|up|down, created_at`, plus optional `target_crop` (Fix A, not returned by `/dashboard`). Part 5 also stores `signals` (matches, best, t_c, margin, zone, allowed, trends, closet_size, errors, path, claude_reply, timings), `decided_by`, `override`, `overrides`, `model`, `latency_ms`, `cost_per_wear`, `matched_closet_item_ids`. `attributes` is null when Part 2 failed.
+Old verdict docs with a null alternative url get a store search link when `/dashboard` reads them.
 
-### Part 5 rules `[DECIDED]` (V1, V5, V8 and hybrid authority agreed) and `[PROPOSED]` (the rest)
-- Priority: `have_this_look` > `micro_trend` > `good_buy`. One verdict per item.
-- Hybrid authority: code computes signals (closet matches, trend match, price). One Claude call, JSON via tool use, judges only the gray band.
-- Zones for `have_this_look`, per category threshold `t_c` (starts at `look_similarity`):
-  - score at or above `t_c + margin`: code forces `have_this_look`
-  - below `t_c - margin`: code forbids it
-  - in between: Claude decides
-  - `margin` `[PROPOSED]` 0.04. Thumbs-down raises `t_c`, thumbs-up lowers it. Part 7 sets the step. Bounds `[PROPOSED]` 0.70 to 0.92.
-- Claude sees text only, except in the gray band, where it also gets the item photo and the top 1 or 2 matched closet photos.
-- Closet under 10 items and no match: say "I don't see this in your closet". Never claim the user lacks it.
-- `micro_trend` needs a matched trend with `lifespan_bucket == "short"`. Alternatives come from the matched trend's source-based alternatives, mapped into the `Alternative` shape.
-- New optional response and stored fields (additive only): `decided_by: code | claude | fallback`, `override: {code_said, claude_said}` logged whenever Claude overrides code inside its zone.
-- Failure: retry the Claude call once, then a code-only verdict with a template reason and `decided_by: "fallback"`.
-- `/analyze` must always return within the card's time budget (target under 3 s typical, hard cap set in Part 5).
-- Attributes for the item come from Part 2 (`/attributes` logic called in-process), and are stored on the verdict doc.
+### Card `[BUILT]` (Part 5)
+- have_this_look: reason and up to 3 closet photos (placeholder icon when an item has no photo). micro_trend: reason, trend name, `lifespan_label` only with a source, source link, alternatives as links (Fix B design, `renderAlternatives` delegates to `alternativesBlock`). good_buy: reason and the wears line tagged "Estimate".
+- Loading copy changes after 5 s. Any `/analyze` failure except auth shows "Second look unavailable" with Try again, and the store's click always goes through.
+- Ownership question (Part 3) is now wired in the extension: shown when `closet_small` and `zone == "none"` (no zone: only when nothing matched). It uses `result.attributes` if present, else one background `/attributes` call. "None of these" saves nothing.
+
+### Still `[PROPOSED]`
+- Per-user `t_c` learning from feedback (Part 7 sets the step).
+- Hard response-time cap below the current worst case.
 
 ## 8. Failure behavior (all parts) `[DECIDED]`
 
@@ -213,8 +221,9 @@ The stub's micro_trend alternatives now come from `alternatives_for_trend(matche
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results on the Fix A + Fix B merge: extension E2E 58/58, unittest 69/69 (trends 22, target item 25, alternative links 22), price parser 23 checks, live `/attributes` on the Pacsun outfit shot returns shirt with a box and crop.
-- Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_main_ab@secondlook.test`.
+- Last known results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 60/60 with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
+- Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@secondlook.test`, plus throwaway `e2e<timestamp>@example.com` users.
+- E2E has a SKIP result for checks that need data the shared DB does not have yet. A SKIP is not a pass.
 - Before any merge to main: all suites pass, then a smoke test of the chain `/attributes`, then embed, then `find_matches`, then trends lookup, then `/analyze`.
 - Tag before big merges: `git tag pre-integration main`.
 - `python scripts/check_keys.py` verifies MongoDB, Claude, Claude web search (about $0.01), Gemini and Nessie.
@@ -242,10 +251,18 @@ The stub's micro_trend alternatives now come from `alternatives_for_trend(matche
 | 6 | Trend alternatives are text only | Fix B adds optional `product_name, product_url, price, store, verified_at, link_kind` | Contract (additive) |
 | 7 | `Alternative.url` is `string|null` | Fix B makes it required and non-empty, adds `store` and `link_kind`. This tightens an existing response field (needs Hiresh's sign-off before push) | Contract |
 | 7 | Verdict doc has no crop | Optional `target_crop` on stored verdicts (Fix A) | Contract (additive) |
+| 7 | `/analyze` is a stub | Part 5 engine replaces it. Stub cycling removed | Contract |
+| 7 | Claude call at temperature 0 | API rejects `temperature` on `claude-haiku-5-5`, so it is omitted. Forced tool use with strict schema, effort low, thinking disabled | Contract |
+| 7 | Response ends at `cost_per_wear` | Adds optional `matched_closet_items`, `decided_by`, `closet_small`, `zone`, `wears_estimated` | Contract (additive) |
+| 7 | `Item` is name, image_url, price, store, url | Adds optional `description`, `breadcrumb`. Extension sends them | Contract (additive) |
+| 7 | `override {code_said, claude_said}` | Also has `rule`. All overrides in `overrides` | Contract (additive) |
+| 7 | `/analyze` under 3 s typical | Measured 3 to 4 s typical | Noted, open item |
+| 5 | `thresholds.json` has 3 keys | Adds `gray_margin: 0.04`. New `config/wears.json` (unverified) | Contract |
+| 11 | E2E 2a and 9 assume the stub returns micro_trend | Checks run on real micro_trend cards, else SKIP; non-micro_trend cards must show no alternatives | Contract |
 
 ## 13. Open items
 
-- Part 5 not built. Defaults V2 to V4, V6, V7, V9 to V15 not confirmed.
+- Part 5 built. Open: `/analyze` takes 3 to 4 s typical (target under 3 s); the gray band with real closet photos is untested; the 5 TODO rows in `eval/verdicts_eval.csv` need the seed trends; no eval agreement numbers yet.
 - 10 seed trends from Hiresh. `seed/trends_seed.json` holds only one `EXAMPLE barrel-leg jeans` entry. The 3 placeholder trends that `GET /trends` returns come from Part 0 data already in the database.
 - Demo closet seeding (closet walkthrough video).
 - `duplicate_similarity` tuning with real re-photographed pairs.
