@@ -283,7 +283,7 @@ Optional. Skipping works the same with or without a goal. One goal per user, no 
 ### saved_cents rule
 - `nessie_enabled` users: projected Nessie Savings balance (`available_cents` plus pending incoming credits), the same number `GET /savings` returns as `savings_cents`. Source `"nessie"`.
 - Everyone else, or when Nessie is unavailable: `round(money_kept * 100)`, the local sum of skip prices. Source `"local"`.
-- Nessie reads are cached 15 s per user (shared by `/goal`, `/goal/items` and `/action`'s goal field), so repeated reads stay far under Photon-style rate limits (Nessie allows 120 requests per minute per key).
+- Nessie reads are cached 15 s per user (shared by `/goal`, `/goal/items` and `/action`'s goal field), so repeated reads stay far under the Nessie limit of 120 requests per minute per key.
 - `percent = min(100, floor(saved_cents * 100 / target_cents))`. `reached = saved_cents >= target_cents`.
 
 ### Endpoints (JWT)
