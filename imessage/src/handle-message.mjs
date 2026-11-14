@@ -1,5 +1,5 @@
 // Routes one received iMessage. All shopping logic lives in the backend (POST /imessage/*).
-import { analyzePhoto, answerOwnership, askQuestion, linkPhone, NotLinkedError } from "./backend.mjs";
+import { analyzePhoto, answerOwnership, askQuestion, getDetails, linkPhone, NotLinkedError } from "./backend.mjs";
 import { toJpeg } from "./image.mjs";
 import { downloadAttachment, parseContent, reply } from "./photon.mjs";
 import { routeMessage } from "./route.mjs";
@@ -56,9 +56,23 @@ async function handlePhoto({ msg, phone, spaceId, text, attachmentId }) {
     const res = await analyzePhoto(phone, jpeg, text);
     console.log(`[${msg.id}] verdict ${res.verdict} (${res.verdict_id})`);
     const ask = res.ask_ownership ? "\n\nDo you already own this? Reply yes or no." : "";
-    return reply(spaceId, res.message + ask);
+    await reply(spaceId, res.message);
+    await sendDetails({ msg, phone, spaceId, verdictId: res.verdict_id });
+    if (ask) await reply(spaceId, ask.trim()); // last, so a "yes" reply follows the question it answers
   } catch (err) {
     if (err instanceof NotLinkedError) return reply(spaceId, LINK_PROMPT + " Then send the photo again.");
     throw err;
+  }
+}
+
+// Full analysis (materials, lifespan, cost per wear, outfits) as a second text. Never fails the photo:
+// the verdict was already sent.
+async function sendDetails({ msg, phone, spaceId, verdictId }) {
+  if (!verdictId || verdictId === "unsaved") return;
+  try {
+    const { message } = await getDetails(phone, verdictId);
+    if (message) await reply(spaceId, message);
+  } catch (err) {
+    console.log(`[${msg.id}] full analysis skipped: ${err.message}`);
   }
 }

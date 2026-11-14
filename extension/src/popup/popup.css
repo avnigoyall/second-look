@@ -70,18 +70,20 @@ button.link:not(:disabled):active { scale: 1; }
 /* ---------- savings summary (non-product pages) ---------- */
 .stack { display: grid; gap: 10px; }
 .summary { margin-top: 0; padding-top: 4px; border-top: 0; }
-.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .stat {
   display: grid; gap: 2px; padding: 12px; border-radius: 12px; background: var(--card); box-shadow: var(--shadow);
 }
 .stat-value { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--accent); font-variant-numeric: tabular-nums; }
+/* Money is the headline tile; carbon sits below it */
+.stat-money { padding: 16px; }
+.stat-money .stat-value { font-size: 34px; line-height: 1.1; }
+.stat-carbon .stat-value { font-size: 22px; color: var(--good); }
 .stat-label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .tag {
   font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 999px;
   background: var(--soft); color: var(--muted); letter-spacing: 0.02em;
 }
 .sources summary { cursor: pointer; color: var(--muted); }
-/* Reset the session-list card styles that the global ul/li rules would apply here. */
 .sources ul { margin: 6px 0 0; padding-left: 16px; display: grid; gap: 4px; color: var(--muted); list-style: disc; max-height: none; overflow: visible; }
 .sources li { display: list-item; padding: 0; background: none; box-shadow: none; border: 0; border-radius: 0; line-height: 1.4; }
 sub { font-size: 0.75em; line-height: 0; }
@@ -91,25 +93,6 @@ sub { font-size: 0.75em; line-height: 0; }
 .status { font-size: 12px; color: var(--muted); min-height: 1.45em; }
 .status.error { color: var(--danger); }
 #login-status:empty, #status:empty { display: none; }
-
-/* ---------- session list ---------- */
-.empty { font-size: 12px; color: var(--muted); padding: 10px 12px; background: var(--soft); border-radius: 10px; }
-ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
-li { display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; align-items: center; padding: 6px; border-radius: 10px; background: var(--card); box-shadow: var(--shadow); border: 1px solid transparent; }
-li img, li .ph { width: 36px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--soft); outline: 1px solid var(--img-outline); outline-offset: -1px; }
-li .text { min-width: 0; }
-li .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-li .meta { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
-li.removed .name { color: var(--muted); text-decoration: line-through; }
-.chip { font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 999px; background: var(--soft); color: var(--muted); }
-.chip.skipped { color: var(--good); background: color-mix(in oklch, var(--good), transparent 88%); }
-.chip.bought { color: var(--have); background: color-mix(in oklch, var(--have), transparent 88%); }
-.x {
-  width: 28px; height: 28px; padding: 0; display: grid; place-items: center; border-radius: 8px;
-  background: transparent; color: var(--muted);
-}
-.x svg { width: 14px; height: 14px; }
-@media (hover: hover) { .x:hover { background: var(--soft); color: var(--ink); } }
 
 /* ---------- diagnose ---------- */
 .diag { display: grid; gap: 6px; }

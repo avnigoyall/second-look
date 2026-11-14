@@ -119,8 +119,99 @@
     });
   }
 
+  // ---------- ready to add? (size chosen, in stock) ----------
+  // The check only runs when the store would really add the item. Otherwise the click goes straight to
+  // the store, which shows its own "select a size" or "sold out" message.
+
+  const UNAVAILABLE_RE = /\b(sold\s*out|out of stock|unavailable|notify me|coming soon|agotado|épuisé|ausverkauft)\b/i;
+  const NEEDS_CHOICE_RE = /\b(select|choose|pick)\s+(a\s+|an\s+|your\s+)?(size|colou?r|option|variant|style|fit|length)\b/i;
+  const SIZE_RE = /\b(sizes?|talla|taille|größe)\b/i;
+  const NOT_SIZE_RE = /\bsize\s*(guide|chart|help|&\s*fit|and fit)\b|\bfind your size\b/i;
+  const SELECTED_SEL = [
+    "input:checked", "[aria-checked='true']", "[aria-pressed='true']", "[aria-selected='true']", "[aria-current='true']",
+    "[data-selected='true']", "[data-state='checked']", "[data-state='on']", "[data-state='active']",
+  ].join(",");
+  const SELECTED_CLASS_RE = /(^|[\s_-])(selected|is-selected|active|is-active|checked|is-checked|current|chosen)($|[\s_-])/i;
+  const OPTION_SEL = "input[type=radio], [role=radio], [role=option], button, li, a, label";
+
+  const shortText = (el) => (el.textContent || el.value || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+  const isSelected = (el) => el.matches(SELECTED_SEL) || SELECTED_CLASS_RE.test(el.className?.baseVal ?? el.className ?? "")
+    || Boolean(el.querySelector?.("input:checked"));
+
+  // Does this container describe itself as a size picker (and not a size guide link)?
+  function sizeSignal(container) {
+    const attrs = ["aria-label", "id", "data-testid", "data-qa", "name", "class"]
+      .map((a) => container.getAttribute(a) || "").join(" ").replace(/[-_]/g, " ");
+    const heading = container.querySelector(":scope > legend, :scope > label, :scope > h2, :scope > h3, :scope > h4, :scope > p, :scope > span");
+    const label = heading ? shortText(heading).slice(0, 40) : "";
+    const prev = container.previousElementSibling ? shortText(container.previousElementSibling).slice(0, 40) : "";
+    const labelledBy = container.getAttribute("aria-labelledby");
+    const named = labelledBy ? shortText(document.getElementById(labelledBy) || document.createElement("i")) : "";
+    const text = `${attrs} ${label} ${prev} ${named}`;
+    return SIZE_RE.test(text) && !NOT_SIZE_RE.test(text);
+  }
+
+  function sizeOptions(container) {
+    return Array.from(container.querySelectorAll(OPTION_SEL)).filter((o) => {
+      if (o.closest("[role=dialog], header, nav, footer")) return false;
+      const t = shortText(o);
+      return o.matches("input[type=radio]") || (t && t.length <= 12 && !NOT_SIZE_RE.test(t) && !NEEDS_CHOICE_RE.test(t));
+    });
+  }
+
+  // Size pickers without a choice. A one-option picker ("One size") counts as chosen.
+  function unchosenSizePickers() {
+    const pickers = [];
+    const containers = document.querySelectorAll("fieldset, [role=radiogroup], [role=listbox], ul, ol, div, section");
+    for (const c of containers) {
+      if (c.closest("header, nav, footer") || !sizeSignal(c)) continue;
+      const options = sizeOptions(c);
+      if (options.length < 2) continue;
+      if (pickers.some((p) => c.contains(p))) continue; // keep the innermost picker
+      for (let i = pickers.length - 1; i >= 0; i--) if (pickers[i].contains(c)) pickers.splice(i, 1);
+      pickers.push(c);
+    }
+    const unchosen = pickers.filter((p) => !sizeOptions(p).some(isSelected) && !p.querySelector("input:checked"));
+    // <select> size menus: a real value must be chosen (not "Select size").
+    for (const s of document.querySelectorAll("select")) {
+      const name = `${s.name} ${s.id} ${s.getAttribute("aria-label") || ""} ${s.labels?.[0]?.textContent || ""} ${s.options[0]?.text || ""}`;
+      if (!SIZE_RE.test(name) || NOT_SIZE_RE.test(name)) continue;
+      const opt = s.options[s.selectedIndex];
+      if (!opt || opt.value === "" || NEEDS_CHOICE_RE.test(opt.text) || /^\s*(-+|select|choose)/i.test(opt.text)) unchosen.push(s);
+    }
+    return unchosen;
+  }
+
+  // Single product marked out of stock in JSON-LD (variant groups are left to the button and size checks).
+  function jsonLdOutOfStock() {
+    for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+      let data;
+      try { data = JSON.parse(s.textContent); } catch { continue; }
+      const nodes = [].concat(data?.["@graph"] || data);
+      for (const n of nodes) {
+        if (!n || ![].concat(n["@type"]).includes("Product") || n.hasVariant) continue;
+        const offers = [].concat(n.offers || []).flatMap((o) => (o?.offers ? [].concat(o.offers) : [o]));
+        const avail = offers.map((o) => String(o?.availability || "")).filter(Boolean);
+        if (avail.length && avail.every((a) => /OutOfStock|SoldOut|Discontinued/i.test(a))) return true;
+      }
+    }
+    return false;
+  }
+
+  // { ready: true } or { ready: false, reason } for an add-to-cart control.
+  function readiness(control) {
+    if (control.disabled || control.getAttribute("aria-disabled") === "true") return { ready: false, reason: "button disabled" };
+    const label = `${shortText(control)} ${control.getAttribute("aria-label") || ""}`;
+    if (UNAVAILABLE_RE.test(label)) return { ready: false, reason: "sold out" };
+    if (NEEDS_CHOICE_RE.test(label)) return { ready: false, reason: "needs a size or option" };
+    if (jsonLdOutOfStock()) return { ready: false, reason: "out of stock" };
+    const unchosen = unchosenSizePickers();
+    if (unchosen.length) return { ready: false, reason: "no size selected" };
+    return { ready: true };
+  }
+
   global.SecondLookMatchers = {
     ADD_TEXT_RES, ADD_ATTR_RE, NOT_CART_RE, REMOVE_RE,
-    isAddToCart, isRemove, findControl, otherProductTile, describe, candidates,
+    isAddToCart, isRemove, findControl, otherProductTile, describe, candidates, readiness,
   };
 })(globalThis);

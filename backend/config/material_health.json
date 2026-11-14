@@ -1,0 +1,38 @@
+{
+  "_note": "Skin-health notes per fiber or finish, shown on the card only with the cited source (CONTRACT: no claim without a source). Durability is judged by Claude; this table is health only. A fiber with no sourced note shows nothing. Notes are hedged: these are allergy risks for sensitive people, not general harm. 'checked' records how the URL was verified.",
+  "fibers": {
+    "polyester": {
+      "note": "Some dyes used on polyester can rub off onto skin, especially with sweat, and may cause an itchy rash in sensitive people.",
+      "source": "Contact Dermatitis Institute, Disperse Blue 106",
+      "url": "https://www.contactdermatitisinstitute.com/disperse-blue-106.php",
+      "checked": "page loads and names polyester and nylon"
+    },
+    "nylon": {
+      "note": "Some dyes used on nylon can rub off onto skin, especially with sweat, and may cause an itchy rash in sensitive people.",
+      "source": "Contact Dermatitis Institute, Disperse Blue 106",
+      "url": "https://www.contactdermatitisinstitute.com/disperse-blue-106.php",
+      "checked": "page loads and names polyester and nylon"
+    },
+    "acetate": {
+      "note": "Acetate is dyed with the same disperse dyes linked to clothing rashes in sensitive people.",
+      "source": "Contact Dermatitis Institute, Disperse Blue 106",
+      "url": "https://www.contactdermatitisinstitute.com/disperse-blue-106.php",
+      "checked": "page loads; acetate named in the search summary of this source"
+    },
+    "spandex": {
+      "note": "Stretch fibers and elastic can carry rubber chemicals that cause allergic rashes in some people where the fabric touches skin.",
+      "source": "DermNet, Rubber accelerator contact allergy",
+      "url": "https://dermnetnz.org/topics/allergy-to-rubber-accelerators",
+      "checked": "page loads and covers clothing, underwear and elastic"
+    }
+  },
+  "finishes": {
+    "wrinkle_free": {
+      "match": ["wrinkle-free", "wrinkle free", "wrinkle-resistant", "wrinkle resistant", "non-iron", "no-iron", "easy care", "easy-care", "permanent press"],
+      "note": "Wrinkle-free finishes can use formaldehyde resins, which may cause skin rashes in people sensitive to it. Washing before wearing helps.",
+      "source": "U.S. GAO, Formaldehyde in Textiles (GAO-10-875)",
+      "url": "https://www.gao.gov/products/GAO-10-875",
+      "checked": "official report; the site blocks automated checks, content confirmed through search results"
+    }
+  }
+}

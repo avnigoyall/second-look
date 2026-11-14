@@ -260,6 +260,9 @@ const handlers = {
     api("/read-price", { method: "POST", body: { url, name, windows }, timeoutMs: READ_PRICE_TIMEOUT_MS }),
   READ_URL: readUrl,
   SEND_ACTION: sendAction,
+  // Full analysis after a verdict: materials, lifespan, cost per wear, closet sentiment, outfits.
+  ANALYZE_DETAILS: ({ verdictId }) =>
+    api("/analyze/details", { method: "POST", body: { verdict_id: verdictId }, timeoutMs: 25000 }),
   SEND_FEEDBACK: ({ verdictId, value }) =>
     api("/feedback", { method: "POST", body: { verdict_id: verdictId, value } }),
   // Small-closet ownership question (Part 3). Only used when /analyze sends no attributes.

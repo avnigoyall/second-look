@@ -1,8 +1,6 @@
-// Popup: log in, "Check this item", the session list (manual removal fallback), and Diagnose.
+// Popup: log in, the savings dashboard (always), "Check this item" on product pages, and Diagnose.
 // All network calls go through the service worker.
 const $ = (id) => document.getElementById(id);
-const STATUS_LABELS = { checked: "Checked", skipped: "Skipped", bought: "Bought", removed: "Removed" };
-const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
 
 function send(type, payload) {
   return chrome.runtime.sendMessage({ type, payload }).then((res) => {
@@ -31,17 +29,18 @@ function render({ loggedIn, email, phone }) {
 
 let pageModeLoaded = false;
 
+// The savings dashboard is always shown. Product pages add "Check this item" and Diagnose.
 function showProductTools(isProduct) {
   $("product-tools").hidden = !isProduct;
   $("diag-section").hidden = !isProduct;
-  $("summary").hidden = isProduct;
+  $("check-anyway-row").hidden = isProduct;
 }
 
 async function loadPageMode() {
   pageModeLoaded = true;
+  loadSummary();
   const kind = await send("PAGE_KIND").catch(() => ({ product: false }));
   showProductTools(kind.product);
-  if (!kind.product) loadSummary();
 }
 
 const money = (n) => Number(n || 0).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: n % 1 ? 2 : 0 });
@@ -52,7 +51,9 @@ async function loadSummary() {
   try {
     const data = await send("IMPACT");
     $("money-kept").textContent = money(data.money_kept);
-    $("co2e").textContent = `${Number(data.co2e_kg).toLocaleString("en-US", { maximumFractionDigits: 1 })} kg`;
+    const sub = document.createElement("sub");
+    sub.textContent = "2";
+    $("co2e").replaceChildren(`${Number(data.co2e_kg).toLocaleString("en-US", { maximumFractionDigits: 1 })} kg CO`, sub, "e");
 
     let detail;
     if (!data.items_skipped) {
@@ -96,61 +97,6 @@ function showAuth(mode) {
   setStatus("login-status", "");
   render({ loggedIn: false });
   $(mode === "signup" ? "su-email" : "email").focus();
-}
-
-// ---------- session list ----------
-
-function renderSession(entries) {
-  const list = $("session-list");
-  list.replaceChildren();
-  $("session-empty").hidden = entries.length > 0;
-  const active = entries.filter((e) => e.status !== "removed").length;
-  $("session-count").textContent = entries.length ? `${active} in cart` : "";
-
-  for (const entry of entries) {
-    const li = document.createElement("li");
-    if (entry.status === "removed") li.className = "removed";
-
-    let thumb;
-    if (entry.image_url) {
-      thumb = document.createElement("img");
-      thumb.src = entry.image_url;
-      thumb.alt = "";
-    } else {
-      thumb = document.createElement("div");
-      thumb.className = "ph";
-    }
-
-    const text = document.createElement("div");
-    text.className = "text";
-    const name = document.createElement("div");
-    name.className = "name";
-    name.textContent = entry.name;
-    name.title = entry.name;
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    const price = document.createElement("span");
-    price.textContent = entry.price != null ? `$${Number(entry.price).toFixed(2)}` : "No price";
-    const chip = document.createElement("span");
-    chip.className = `chip ${entry.status}`;
-    chip.textContent = STATUS_LABELS[entry.status] || entry.status;
-    meta.append(price, chip);
-    text.append(name, meta);
-
-    li.append(thumb, text);
-    if (entry.status !== "removed") {
-      const x = document.createElement("button");
-      x.className = "x";
-      x.innerHTML = X_ICON;
-      x.setAttribute("aria-label", `Mark ${entry.name} as removed`);
-      x.title = "Mark as removed";
-      x.addEventListener("click", () => SecondLookSession.markRemoved(entry.id));
-      li.append(x);
-    } else {
-      li.append(document.createElement("span"));
-    }
-    list.append(li);
-  }
 }
 
 // ---------- actions ----------
@@ -265,5 +211,3 @@ $("logout").addEventListener("click", async () => {
 // ---------- start ----------
 
 send("GET_STATE").then(render).catch((err) => setStatus("login-status", err.message, true));
-SecondLookSession.list().then(renderSession);
-SecondLookSession.subscribe(renderSession);

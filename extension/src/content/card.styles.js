@@ -41,16 +41,24 @@
       border: 1px solid transparent; /* keeps an edge in forced-colors mode */
       pointer-events: auto;
       opacity: 1;
-      transition-property: opacity, translate, filter;
+      transition-property: opacity, translate;
       transition-duration: 150ms;
       transition-timing-function: ease-out;
     }
+    /* Blurs and dims the store behind the Buy / Skip verdict. Sits under the card (DOM order). */
+    .backdrop {
+      position: fixed; inset: 0; pointer-events: auto;
+      background: oklch(0.2 0.03 300 / 0.28);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      opacity: 1; transition: opacity 200ms ease-out;
+    }
+    .backdrop[data-entering], .backdrop[data-leaving] { opacity: 0; }
     .card[data-entering] { opacity: 0; }
     .card[data-leaving] { opacity: 0; }
     @media (prefers-reduced-motion: no-preference) {
-      .card { translate: 0 0; filter: blur(0); }
-      .card[data-entering] { translate: 0 -12px; filter: blur(4px); transition-duration: 300ms; }
-      .card[data-leaving] { translate: 0 -12px; filter: blur(4px); }
+      .card { translate: 0 0; }
+      .card[data-entering] { translate: 0 -12px; transition-duration: 300ms; }
+      .card[data-leaving] { translate: 0 -12px; }
     }
 
     .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
@@ -81,14 +89,11 @@
     button.btn:disabled { opacity: 0.55; cursor: default; }
     button.primary { background: var(--accent); color: var(--accent-ink); }
     button.secondary { background: var(--soft); color: var(--ink); }
-    button.thumb { width: 36px; padding: 8px 0; background: var(--soft); color: var(--muted); }
-    button.thumb svg { width: 16px; height: 16px; }
-    button.thumb[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
     button.link { all: unset; cursor: pointer; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
     @media (hover: hover) {
       .icon-btn:hover { background: var(--soft); color: var(--ink); }
       button.primary:not(:disabled):hover { background: color-mix(in oklch, var(--accent), black 8%); }
-      button.secondary:not(:disabled):hover, button.thumb:not(:disabled):not([aria-pressed="true"]):hover { background: color-mix(in oklch, var(--soft), var(--ink) 6%); }
+      button.secondary:not(:disabled):hover { background: color-mix(in oklch, var(--soft), var(--ink) 6%); }
       button.link:hover { color: var(--ink); }
     }
     button.btn:focus-visible, .icon-btn:focus-visible, button.link:focus-visible, input:focus-visible {
@@ -173,6 +178,31 @@
     .wears { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
     .tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: var(--muted); background: var(--soft); }
 
+    /* Full analysis (POST /analyze/details), collapsible, above the action buttons */
+    .analysis-loading { margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+    .analysis { margin-bottom: 12px; border-radius: 12px; background: var(--soft); font-size: 13px; }
+    .analysis summary {
+      display: flex; align-items: baseline; gap: 8px; padding: 10px 12px; cursor: pointer; list-style: none;
+      border-radius: 12px; outline-offset: 2px;
+    }
+    .analysis summary::-webkit-details-marker { display: none; }
+    .analysis summary::after { content: "Show"; margin-left: auto; font-size: 12px; font-weight: 600; color: var(--accent); }
+    .analysis[open] summary::after { content: "Hide"; }
+    .an-title { font-weight: 600; }
+    .an-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .an-row { display: grid; gap: 3px; padding: 8px 12px; border-top: 1px solid var(--line); }
+    .an-row:last-child { padding-bottom: 12px; }
+    .an-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+    .an-strong { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .an-health { font-size: 12px; color: var(--muted); text-wrap: pretty; }
+    .an-health a, .an-list a { color: var(--accent); }
+    .an-list { margin: 0; padding-left: 16px; display: grid; gap: 3px; }
+    .an-list li { text-wrap: pretty; }
+    .an-rating { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; text-transform: capitalize; }
+    .an-rating.good { color: var(--good); background: color-mix(in oklch, var(--good), transparent 88%); }
+    .an-rating.fair { color: var(--trend); background: color-mix(in oklch, var(--trend), transparent 88%); }
+    .an-rating.poor { color: var(--danger); background: color-mix(in oklch, var(--danger), transparent 88%); }
+
     /* small-closet ownership question: quiet, sits above the buttons */
     .own { margin-bottom: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
     .own-q { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
@@ -238,13 +268,13 @@
       position: fixed; top: 16px; right: 16px; max-width: min(320px, calc(100vw - 32px)); box-sizing: border-box;
       display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-radius: 12px;
       background: var(--bg); box-shadow: var(--shadow); border: 1px solid transparent; font-size: 13px; pointer-events: auto;
-      transition-property: opacity, translate, filter; transition-duration: 150ms; transition-timing-function: ease-out;
+      transition-property: opacity, translate; transition-duration: 150ms; transition-timing-function: ease-out;
     }
     .notice svg { width: 16px; height: 16px; flex: none; color: var(--accent); }
     .card ~ .notice { top: auto; bottom: 16px; }
     .notice[data-entering], .notice[data-leaving] { opacity: 0; }
     @media (prefers-reduced-motion: no-preference) {
-      .notice[data-entering], .notice[data-leaving] { translate: 0 -12px; filter: blur(4px); }
+      .notice[data-entering], .notice[data-leaving] { translate: 0 -12px; }
     }
   `;
 })(globalThis);

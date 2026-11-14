@@ -18,12 +18,10 @@
     close: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
     alert: svg('<circle cx="12" cy="12" r="9"/><path d="M12 8v4.5M12 16h.01"/>'),
     check: svg('<path d="M20 6 9 17l-5-5"/>'),
-    up: svg('<path d="M7 10v11"/><path d="M15 5.9 14 10h5.8a2 2 0 0 1 1.9 2.6l-2.3 7A2 2 0 0 1 17.5 21H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3l4-8a3 3 0 0 1 3 3.9Z"/>'),
     external: svg('<path d="M7 17 17 7"/><path d="M8 7h9v9"/>'),
     search: svg('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
     shirt: svg('<path d="M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23Z"/>', 1.5),
     pause: svg('<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>'),
-    down: svg('<path d="M17 14V3"/><path d="M9 18.1 10 14H4.2a2 2 0 0 1-1.9-2.6l2.3-7A2 2 0 0 1 6.5 3H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3l-4 8a3 3 0 0 1-3-3.9Z"/>'),
   };
 
   let card = null;
@@ -31,6 +29,8 @@
   let notice = null;
   let noticeTimer = null;
   let onClose = null;
+  let backdrop = null; // blurs the page behind the Buy / Skip verdict
+  const hideListeners = new Set(); // flow.js: release a held add-to-cart click when the card is closed
   let stateTimer = null; // the checking state's "still checking" timer
 
   const SLOW_AFTER_MS = 5000;
@@ -86,13 +86,33 @@
     card.setAttribute("aria-label", `Second Look: ${label}`);
     body.replaceChildren();
     clearTimeout(stateTimer);
+    setBackdrop(false);
     const previous = onClose; // settle a pending price prompt that a new state replaced
     onClose = null;
     previous?.();
     return body;
   }
 
+  // A full-page layer under the card that blurs and dims the store, so the verdict is the only thing in
+  // focus. Clicks on it do nothing: the shopper chooses Buy or Skip (or closes the card with x / Escape).
+  function setBackdrop(on) {
+    if (on) {
+      if (backdrop?.isConnected) return;
+      backdrop = el("div", { class: "sl backdrop", "aria-hidden": "true" });
+      backdrop.addEventListener("pointerdown", (e) => { e.preventDefault(); });
+      root().insertBefore(backdrop, card && card.isConnected ? card : null);
+      enter(backdrop);
+      card?.setAttribute("aria-modal", "true");
+    } else if (backdrop) {
+      const b = backdrop;
+      backdrop = null;
+      leave(b);
+      card?.removeAttribute("aria-modal");
+    }
+  }
+
   function hide() {
+    setBackdrop(false);
     if (!card) return;
     clearTimeout(stateTimer);
     const closing = onClose;
@@ -100,6 +120,13 @@
     leave(card);
     card = null;
     closing?.();
+    for (const fn of [...hideListeners]) fn();
+  }
+
+  // Calls fn when the shopper closes the card (close button, Escape). Returns an unsubscribe function.
+  function onHide(fn) {
+    hideListeners.add(fn);
+    return () => hideListeners.delete(fn);
   }
 
   const money = (n) => (n == null ? "" : `$${Number(n).toFixed(2)}`);
@@ -143,14 +170,18 @@
     ]);
   }
 
-  function showChecking(item) {
+  // held: an add-to-cart click is waiting for the verdict (trigger.js). It goes through on Buy, on close,
+  // on any failure, or after 15 s without a verdict.
+  function showChecking(item, { held = false } = {}) {
     const b = frame("checking");
     if (item?.name) b.append(itemRow(item));
-    const text = el("p", { text: "Second Look is checking..." });
+    const text = el("p", { text: held ? "Loading analysis before it goes in your bag..." : "Loading analysis..." });
     b.append(el("div", { class: "checking", role: "status" }, [el("div", { class: "spinner" }), text]));
-    // The engine can take up to about 10 s. Past 5 s, say so calmly. The store is never held.
+    // The engine can take up to about 10 s. Past 5 s, say so calmly.
     stateTimer = setTimeout(() => {
-      text.textContent = "Still checking. Your cart is not waiting on us.";
+      text.textContent = held
+        ? "Still loading. If this takes much longer, it goes in your bag anyway."
+        : "Still loading. Your cart is not waiting on us.";
     }, SLOW_AFTER_MS);
   }
 
@@ -187,7 +218,7 @@
     });
   }
 
-  // handlers: { onAction(action) -> Promise, onFeedback(value) -> Promise }
+  // handlers: { onAction(action) -> Promise }
   function showVerdict(item, result, handlers) {
     const b = frame(LABELS[result.verdict] || result.verdict);
     const status = el("p", { class: "status", role: "status" });
@@ -196,21 +227,13 @@
       status.classList.toggle("error", isError);
       status.classList.remove("saved");
     };
-    // Money actually moved: a check icon and ink text, so the confirmation reads as done.
-    const setSaved = (text) => {
-      setStatus("");
-      status.classList.add("saved");
-      status.append(el("span", { class: "saved-icon", html: ICONS.check }), el("span", { text }));
-    };
 
     // The highlighted (primary) button follows the verdict: "Buy it" for a good buy, "Skip it" otherwise.
     const goodBuy = result.verdict === "good_buy";
     const skip = el("button", { class: `btn ${goodBuy ? "secondary" : "primary"}`, text: goodBuy ? "Skip it anyway" : "Skip it" });
     const buy = el("button", { class: `btn ${goodBuy ? "primary" : "secondary"}`, text: goodBuy ? "Buy it" : "Buy anyway" });
-    const up = el("button", { class: "btn thumb", "aria-label": "Thumbs up", "aria-pressed": "false", html: ICONS.up });
-    const down = el("button", { class: "btn thumb", "aria-label": "Thumbs down", "aria-pressed": "false", html: ICONS.down });
-
-    const actions = el("div", { class: "row" }, goodBuy ? [buy, skip, up, down] : [skip, buy, up, down]);
+    // Feedback (thumbs up/down) removed from the card for now; POST /feedback still exists on the backend.
+    const actions = el("div", { class: "row" }, goodBuy ? [buy, skip] : [skip, buy]);
     b.append(
       itemRow(item),
       el("span", { class: `badge ${result.verdict}`, text: LABELS[result.verdict] || result.verdict }),
@@ -219,66 +242,152 @@
       actions,
       status,
     );
+    setBackdrop(true);
 
+    // Buy: the held add-to-cart click goes to the store (flow.js), then the card closes.
+    // Skip: the held click is dropped and the card closes; nothing else happens on the page.
+    // The action is still recorded for the savings dashboard, in the background.
     async function act(action) {
       skip.disabled = buy.disabled = true;
-      setStatus("Saving...");
-      let res;
+      let sending;
       try {
-        res = await handlers.onAction(action);
+        sending = handlers.onAction(action); // flow.js releases or drops the held click before its first await
       } catch (err) {
-        // A timeout may still have reached the server, so a Skip stays skipped (no second
-        // transfer). Any other failure saved nothing: show it and let the user try again.
-        if (action === "skipped" && err.code === "timeout") return setStatus(SKIP_PENDING);
-        skip.disabled = buy.disabled = false;
-        return setStatus(err.message, true);
+        sending = Promise.reject(err);
       }
-      if (action === "bought") return setStatus("Marked as bought.");
-      const moved = movedCents(res);
-      if (res?.transfer?.status === "no_price") setStatus(SKIP_NO_PRICE);
-      else if (moved == null) setStatus(SKIP_PENDING);
-      else setSaved(`Skipped. ${money(moved / 100)} moved to savings`);
+      hide();
+      try {
+        const res = await sending;
+        // Rare: the store re-rendered its button while the card was open, so the replay had nothing to click.
+        if (action === "bought" && res?.bag === "missing") showNotice("Press the store's add button again to add it.");
+      } catch (err) {
+        console.warn("[SecondLook] action not saved:", err.message);
+      }
     }
     skip.addEventListener("click", () => act("skipped"));
     buy.addEventListener("click", () => act("bought"));
 
-    async function rate(value, button, other) {
-      setStatus("Saving...");
-      try {
-        await handlers.onFeedback(value);
-        button.setAttribute("aria-pressed", "true");
-        other.setAttribute("aria-pressed", "false");
-        setStatus("Thanks for the feedback.");
-      } catch (err) {
-        setStatus(err.message, true);
-      }
-    }
-    up.addEventListener("click", () => rate("up", up, down));
-    down.addEventListener("click", () => rate("down", down, up));
     (goodBuy ? buy : skip).focus({ preventScroll: true }); // focus the highlighted button
 
     // Lets flow.js add the ownership question later, only while this verdict is still on screen.
+    let analysis = null; // the Full analysis block, filled in by flow.js after /analyze/details answers
     return {
       isCurrent: () => actions.isConnected,
       addOwnership(options, onAnswer) {
         if (actions.isConnected) b.insertBefore(ownershipBlock(options, onAnswer), actions);
       },
+      showDetailsLoading() {
+        if (!actions.isConnected || analysis) return;
+        analysis = el("p", { class: "analysis-loading", role: "status", text: "Loading full analysis..." });
+        b.insertBefore(analysis, actions);
+      },
+      addDetails(details) {
+        if (!actions.isConnected) return;
+        const block = analysisBlock(details, item);
+        if (!block) return this.removeDetails();
+        if (analysis) analysis.replaceWith(block); else b.insertBefore(block, actions);
+        analysis = block;
+        // The analysis estimate (this fabric and garment) replaces the category average on the wears line,
+        // so the card never shows two different wear counts.
+        const wears = details.durability?.expected_wears;
+        const line = b.querySelector(".wears span:first-child");
+        if (wears && line) {
+          const cpw = details.cost?.cost_per_wear;
+          line.textContent = `About ${wears} wears${cpw != null ? `, ${money(cpw)} per wear` : ""}`;
+        }
+      },
+      removeDetails() {
+        analysis?.remove();
+        analysis = null;
+      },
     };
   }
 
-  // ---------- Skip it confirmation ----------
+  // ---------- Full analysis (POST /analyze/details) ----------
 
-  const SKIP_PENDING = "Skipped. Savings update pending";
-  const SKIP_NO_PRICE = "Skipped. No price, so nothing moved"; // final, not pending: plain muted status
+  const PCT = (n) => (n == null ? "" : `${Number.isInteger(n) ? n : n.toFixed(1)}% `);
+  const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
-  // POST /action returns transfer { status, amount_cents } when the savings transfer ran.
-  // Only "done" with a positive amount counts as moved. no_price says nothing moved. pending,
-  // failed, or no transfer field at all (older backend) read as pending, never as an error.
-  function movedCents(res) {
-    const t = res?.transfer;
-    if (t?.status !== "done") return null;
-    const cents = Number(t.amount_cents);
-    return Number.isFinite(cents) && cents > 0 ? cents : null;
+  function row(label, children) {
+    return el("div", { class: "an-row" }, [el("p", { class: "an-label", text: label }), ...children.filter(Boolean)]);
+  }
+
+  function analysisBlock(d, item) {
+    const dur = d.durability || {};
+    const cost = d.cost || {};
+    const summaryBits = [
+      dur.expected_wears ? `about ${dur.expected_wears} wears` : null,
+      cost.cost_per_wear != null ? `${money(cost.cost_per_wear)}/wear` : null,
+    ].filter(Boolean);
+
+    const rows = [];
+
+    // Materials: composition, durability, sourced health notes.
+    const fibers = (d.materials || []).map((f) => `${PCT(f.pct)}${f.fiber}`).join(" · ");
+    const fromPhoto = d.materials_source === "attributes" ? " (from the photo, no label found)" : "";
+    const health = (d.health_notes || []).map((h) => el("p", { class: "an-health" }, [
+      el("span", { text: `${h.note} ` }),
+      el("a", { href: h.url, target: "_blank", rel: "noopener noreferrer", text: `Source: ${h.source}` }),
+    ]));
+    if (fibers || dur.note || health.length) {
+      rows.push(row("Materials", [
+        fibers ? el("p", { class: "an-strong", text: `${cap(fibers)}${fromPhoto}` }) : null,
+        dur.note ? el("p", { text: `${dur.pilling_risk ? `${cap(dur.pilling_risk)} pilling risk. ` : ""}${dur.note}` }) : null,
+        ...health,
+      ]));
+    }
+
+    // Lifespan and trend.
+    if (dur.expected_wears || dur.expected_months || d.trend_note) {
+      const life = [dur.expected_wears && `About ${dur.expected_wears} wears`, dur.expected_months && `${dur.expected_months} months`]
+        .filter(Boolean).join(" · ");
+      rows.push(row("Lifespan", [
+        life ? el("p", { class: "an-strong" }, [el("span", { text: `${life} ` }), el("span", { class: "tag", text: "Estimate" })]) : null,
+        d.trend_note ? el("p", { text: d.trend_note }) : null,
+      ]));
+    }
+
+    // Cost per wear.
+    if (cost.cost_per_wear != null) {
+      rows.push(row("Cost per wear", [el("p", { class: "an-strong" }, [
+        el("span", { text: `${money(cost.cost_per_wear)} per wear ` }),
+        cost.rating ? el("span", { class: `an-rating ${cost.rating}`, text: cost.rating }) : null,
+      ].filter(Boolean))]));
+    }
+
+    // Closet: pieces with the same feel.
+    if (d.closet_checked && (d.similar_closet_items || []).length) {
+      rows.push(row("Similar in your closet", [el("ul", { class: "an-list" },
+        d.similar_closet_items.map((c) => el("li", { text: c.name })))]));
+    }
+
+    // Outfits.
+    if ((d.outfits || []).length) {
+      const newName = item?.name ? `this ${item.name.split(" ").slice(-2).join(" ").toLowerCase()}` : "this piece";
+      rows.push(row(d.outfits[0].uses_new_item ? "Outfits with this piece" : "Outfits with what you own", [
+        el("ul", { class: "an-list" }, d.outfits.map((o) => el("li", {}, [
+          el("span", { class: "an-strong", text: `${o.name}: ` }),
+          el("span", { text: [...(o.uses_new_item ? [newName] : []), ...(o.closet_item_names || [])].join(" + ") }),
+        ]))),
+      ]));
+    }
+
+    // General-purpose alternatives (only sent when cost per wear is poor).
+    const alts = (d.alternatives || []).filter((a) => a && a.name && httpUrl(a.url));
+    if (alts.length) {
+      rows.push(row("Wears more for the money", [el("ul", { class: "an-list" }, alts.map((a) => el("li", {}, [
+        el("a", { href: a.url, target: "_blank", rel: "noopener noreferrer", text: `Search ${a.store || "a store"} for ${a.name.toLowerCase()}` }),
+      ])))]));
+    }
+
+    if (!rows.length) return null; // nothing to add: the section disappears
+    return el("details", { class: "analysis" }, [
+      el("summary", {}, [
+        el("span", { class: "an-title", text: "Full analysis" }),
+        summaryBits.length ? el("span", { class: "an-sub", text: summaryBits.join(" · ") }) : null,
+      ].filter(Boolean)),
+      ...rows,
+    ]);
   }
 
   // ---------- verdict details ----------
@@ -461,5 +570,5 @@
     noticeTimer = setTimeout(() => leave(current), 3500);
   }
 
-  global.SecondLookCard = { showChecking, askPrice, showVerdict, showUnavailable, showError, showPaste, showNotice, hide };
+  global.SecondLookCard = { showChecking, askPrice, showVerdict, showUnavailable, showError, showPaste, showNotice, hide, onHide };
 })(globalThis);

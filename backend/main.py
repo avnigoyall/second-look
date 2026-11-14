@@ -18,6 +18,7 @@ from backend.auth import check_password, create_token, current_user, hash_passwo
 from backend.db import client, closet_items, ensure_indexes, users, verdicts
 from backend.images import decode_base64_image, to_data_url
 from backend.impact import impact_summary
+from backend.services.analysis_details import details_for
 from backend.page_reader import ReadPageError, read_page
 from backend.price_reader import read_price
 from backend.phone import PhoneError, normalize_phone
@@ -185,6 +186,15 @@ def analyze(body: m.AnalyzeRequest, http: Response, user=Depends(current_user)):
     timing_log.info("timing /analyze decided_by=%s %s", response.decided_by,
                     " ".join(f"{k}={v}" for k, v in timings.items()))
     return response
+
+
+@app.post("/analyze/details", response_model=m.AnalysisDetails)
+def analyze_details(body: m.AnalysisDetailsRequest, user=Depends(current_user)):
+    """Full analysis for a verdict: materials, lifespan, cost per wear, closet sentiment, outfits.
+
+    Second step after /analyze so the verdict stays fast. Always answers; failed parts are listed in errors.
+    """
+    return details_for(user, own_verdict(body.verdict_id, user))
 
 
 @app.post("/action", response_model=m.ActionResponse)

@@ -1,6 +1,8 @@
 {
-  "look_similarity": 0.80,
+  "look_similarity": 0.8,
   "require_color_match": true,
   "duplicate_similarity": 0.93,
-  "gray_margin": 0.04
+  "gray_margin": 0.04,
+  "cost_per_wear_good": 1.0,
+  "cost_per_wear_poor": 2.5
 }

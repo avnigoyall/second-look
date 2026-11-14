@@ -92,24 +92,23 @@ const RECORDER = `(() => {
     const sawChecking = states.some((s) => s.includes("checking"));
     (sawChecking ? pass : fail)("1. JSON-LD add-to-cart: checking state shown", JSON.stringify(states));
     (name === "Wide Leg Barrel Jeans" && meta.includes("$49.90") ? pass : fail)("1. JSON-LD item read", `${name} | ${meta}`);
-    (await page.title() === "added" ? pass : fail)("1. store's own add-to-cart handler still ran");
+    // Hold until decided: the store's own add-to-cart handler waits for Buy (Skip keeps it out of the bag).
+    (await page.title() !== "added" ? pass : fail)("1. store's add-to-cart held while the verdict is open");
     await sleep(400); await page.screenshot({ path: `${OUT}/1-verdict.png` });
     // debounce: a second click within 3s does nothing new
     const before = (await storage()).length;
     await page.click("#add");
     await sleep(800);
     ((await storage()).length === before ? pass : fail)("1. 3s debounce per URL");
+    (await card(page).getByRole("button", { name: /Thumbs/ }).count() === 0 ? pass : fail)("1. no feedback buttons on the card");
+    // Skip just closes the card: no confirmation, nothing added to the bag. The skip is still recorded.
     await card(page).getByRole("button", { name: "Skip it" }).click();
-    await card(page).locator(".status", { hasText: "Skipped" }).waitFor();
-    // Part 6: Nessie moved the money ("Skipped. $X moved to savings") or not ("... pending").
-    // E2E users are not Nessie-enabled, so pending is expected, but either is accepted.
-    const confirm = (await card(page).locator(".status").innerText()).trim();
-    (/^Skipped\. (\$\d+\.\d{2} moved to savings|Savings update pending)$/.test(confirm) ? pass : fail)("1. Skip it confirmation copy", confirm);
+    const closed = await card(page).locator(".card").waitFor({ state: "detached", timeout: 2000 }).then(() => true).catch(() => false);
+    (closed ? pass : fail)("1. Skip it closes the card at once");
+    (await page.title() !== "added" ? pass : fail)("1. Skip it keeps the item out of the bag");
+    await sleep(500);
     const entry = (await storage()).find((e) => e.name === "Wide Leg Barrel Jeans");
     (entry?.status === "skipped" ? pass : fail)("1. Skip it updates session status", entry?.status);
-    await card(page).getByRole("button", { name: "Thumbs up" }).click();
-    await card(page).locator(".status", { hasText: "Thanks" }).waitFor();
-    pass("1. thumbs up saved");
   }
 
   // ---- 2a. meta-only page (tier 2), icon button with aria-label ----
@@ -237,18 +236,12 @@ const RECORDER = `(() => {
     (JSON.stringify(await storage()) === snapshot ? pass : fail)("4. unmatched remove does nothing");
 
     await popup.reload();
-    await popup.waitForSelector("#session-list li");
-    const listText = await popup.locator("#session-list").innerText();
-    (/Ribbed Cropped Cardigan[\s\S]*Removed/.test(listText) ? pass : fail)("4. popup list shows Removed");
-    // manual fallback: x button marks an item removed
-    const firstX = popup.locator("#session-list li .x").first();
-    const label = await firstX.getAttribute("aria-label");
-    await firstX.click();
-    await sleep(300);
-    const removedCount = (await storage()).filter((e) => e.status === "removed").length;
-    (removedCount >= 2 ? pass : fail)("4. popup x marks removed", label);
+    // The popup is a savings dashboard now (no session list): money saved and carbon avoided tiles.
+    await popup.waitForSelector("#money-kept");
+    (await popup.isVisible("#money-kept") && await popup.isVisible("#co2e") ? pass : fail)("4. popup shows the savings tiles");
+    (await popup.locator("#session-list").count() === 0 ? pass : fail)("4. popup has no session list");
     await popup.setViewportSize({ width: 340, height: 600 });
-    await popup.screenshot({ path: `${OUT}/4-popup-list.png`, fullPage: true });
+    await popup.screenshot({ path: `${OUT}/4-popup-dashboard.png`, fullPage: true });
   }
 
   // ---- 5. Diagnose: run from the popup against a store tab, copy the JSON ----
