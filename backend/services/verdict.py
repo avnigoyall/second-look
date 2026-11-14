@@ -16,6 +16,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import datetime, timezone
 
 import anthropic
@@ -39,7 +40,13 @@ SMALL_CLOSET = 10
 REASON_MAX_WORDS = 30
 MAX_MATCHED_ITEMS = 3
 GRAY_CLOSET_PHOTOS = 2
-CLAUDE_TIMEOUTS_S = (6.0, 4.0)  # attempt 1, then one retry
+CLAUDE_TIMEOUTS_S = (6.0, 4.0)  # attempt 1, then one retry, each cut to the time left before DEADLINE_S
+# Time budget from the start of decide(). The extension gives up on /analyze at 12 s and then shows
+# "Second look unavailable", so the engine answers by DEADLINE_S with whatever it has (code-only paths).
+DEADLINE_S = 10.5
+IMAGE_WAIT_S = 3.0  # a slower product photo is skipped: attributes run on the text only
+ATTRIBUTES_DEADLINE_S = 7.0  # Gemini attributes (both attempts) must finish by this time
+CLAUDE_MIN_ATTEMPT_S = 1.5  # a Claude attempt with less time left than this is not started
 CLAUDE_MAX_TOKENS = 1024
 # Part 2 fields kept on the verdict doc. Auto-add (services/closet.py) reads category to description from here.
 STORED_ATTRIBUTE_FIELDS = ("category", "color_family", "fabric", "fabric_confidence", "cut", "style", "description",
@@ -267,10 +274,21 @@ def call_claude(payload: dict, images: list[dict], timeout_s: float) -> dict:
     raise ValueError(f"no give_verdict tool call (stop_reason {response.stop_reason})")
 
 
-def ask_claude(payload: dict, images: list[dict]) -> tuple[dict | None, list[str]]:
-    """Attempt 1 (6 s), one retry (4 s). Returns (tool input or None, error notes)."""
+def ask_claude(payload: dict, images: list[dict], deadline: float | None = None) -> tuple[dict | None, list[str]]:
+    """Attempt 1 (6 s), one retry (4 s). Returns (tool input or None, error notes).
+
+    deadline (time.monotonic() value): each attempt's timeout is cut to the time left, and an attempt with
+    less than CLAUDE_MIN_ATTEMPT_S left is not started.
+    """
     errors = []
     for attempt, timeout_s in enumerate(CLAUDE_TIMEOUTS_S, start=1):
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left < CLAUDE_MIN_ATTEMPT_S:
+                errors.append(f"attempt {attempt}: skipped, {max(left, 0):.1f} s left before the deadline")
+                log.warning("verdict: Claude %s", errors[-1])
+                break
+            timeout_s = min(timeout_s, round(left, 1))
         try:
             timing.count("claude_attempts")
             return call_claude(payload, images, timeout_s), errors
@@ -358,16 +376,23 @@ def closet_size(user_id) -> int | None:
         return None
 
 
-def gather_signals(user: dict, item: dict, attrs: dict, config: dict) -> dict:
-    """Closet matches, trends, closet size and the item photo, fetched in parallel."""
+def start_early_lookups(pool: ThreadPoolExecutor, user: dict) -> dict:
+    """Lookups that do not depend on the attributes, started before them: trends and closet size."""
+    return {"trends": timing.submit(pool, timed, "trends_ms", get_trends_for_prompt),
+            "size": timing.submit(pool, timed, "closet_size_ms", closet_size, user["_id"])}
+
+
+def gather_signals(user: dict, item: dict, attrs: dict, config: dict, early: dict | None = None) -> dict:
+    """Closet matches (embedding plus vector search), trends and closet size, in parallel.
+
+    early: futures from start_early_lookups(), already running. item["photo"] is the product photo (JPEG bytes)
+    that decide() fetched for the attributes; it is reused, never fetched twice.
+    """
     errors = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        early = early or start_early_lookups(pool, user)
         f_matches = timing.submit(pool, find_matches, user["_id"], attrs, MATCH_K)
-        f_trends = timing.submit(pool, timed, "trends_ms", get_trends_for_prompt)
-        f_size = timing.submit(pool, timed, "closet_size_ms", closet_size, user["_id"])
-        # The item photo is only sent to Claude in the gray band, and only when there is no target crop.
-        f_photo = (timing.submit(pool, timed, "photo_fetch_ms", fetch_image, item["image_url"])
-                   if item.get("image_url") and not item.get("target_crop") else None)
+        f_trends, f_size = early["trends"], early["size"]
         try:
             matches = f_matches.result()
         except Exception as e:  # EmbeddingError, Atlas (PyMongoError) and anything else: no match
@@ -381,15 +406,49 @@ def gather_signals(user: dict, item: dict, attrs: dict, config: dict) -> dict:
             errors.append(f"trends: {type(e).__name__}")
             all_trends = []
         size = f_size.result()
-        photo = None
-        if f_photo is not None:
-            try:
-                photo = f_photo.result()
-            except Exception as e:
-                log.info("verdict: item photo not available for Claude: %s", str(e)[:200])
+    # The item photo is only sent to Claude in the gray band, and only when there is no target crop.
+    photo = item.get("photo") if not item.get("target_crop") else None
     category = attrs.get("category")
     trends = [t for t in all_trends if category and t.get("category") == category]
     return {"matches": matches, "trends": trends, "closet_size": size, "photo": photo, "errors": errors}
+
+
+def fetch_photo(image_url: str | None) -> bytes | None:
+    """The product photo as resized JPEG bytes, or None (no URL or a failed fetch: attributes use the text)."""
+    if not image_url:
+        return None
+    try:
+        with timing.stage("image_fetch_ms"):
+            return fetch_image(image_url)
+    except Exception as e:
+        log.warning("verdict: image fetch failed, using text only: %s", str(e)[:200])
+        return None
+
+
+def read_attributes(pool: ThreadPoolExecutor, item: dict, started: float) -> tuple[dict, bytes | None]:
+    """Part 2 attributes, bounded by IMAGE_WAIT_S for the photo and ATTRIBUTES_DEADLINE_S in total.
+
+    Returns (understood, photo). A slow photo is skipped (text-only attributes). Past the deadline the
+    attributes count as failed, so decide() answers with a code-only verdict in time.
+    """
+    photo = None
+    if item.get("image_url"):
+        f_photo = timing.submit(pool, fetch_photo, item["image_url"])
+        try:
+            photo = f_photo.result(timeout=IMAGE_WAIT_S)
+        except FutureTimeout:
+            log.warning("verdict: image fetch passed %.1f s, using text only", IMAGE_WAIT_S)
+    f_understood = timing.submit(pool, verdict_deps.understand_for_verdict, item, photo)
+    try:
+        left = max(ATTRIBUTES_DEADLINE_S - (time.monotonic() - started), 0.1)
+        return f_understood.result(timeout=left), photo
+    except FutureTimeout:
+        log.warning("verdict: attributes passed %.1f s, using the code-only path", ATTRIBUTES_DEADLINE_S)
+        timing.count("attributes_timeouts")
+        return {"status": "attributes_failed"}, photo
+    except Exception as e:
+        log.warning("verdict: attributes failed: %s", str(e)[:200])
+        return {"status": "attributes_failed"}, photo
 
 
 def timed(name: str, fn, *args):
@@ -435,12 +494,12 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
     config = thresholds()
     margin = float(config.get("gray_margin", DEFAULT_MARGIN))
 
-    try:
-        understood = verdict_deps.understand_for_verdict(item)
-        timings["attributes_ms"] = elapsed_ms(started)
-    except Exception as e:
-        log.warning("verdict: attributes failed: %s", str(e)[:200])
-        understood = {"status": "attributes_failed"}
+    deadline = started + DEADLINE_S
+    # Not a `with` block: a pool thread stuck past a deadline must not hold the answer.
+    pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="decide")
+    early = start_early_lookups(pool, user)  # trends and closet size run while Gemini reads the item
+    understood, photo = read_attributes(pool, item, started)
+    timings["attributes_ms"] = elapsed_ms(started)
     target_crop = understood.get("target_crop")
     attrs = {k: v for k, v in understood.items() if k not in ("target_crop",)}
 
@@ -460,7 +519,7 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
         verdict, decided_by, reason = "good_buy", "code", NON_APPAREL_REASON
     else:
         mark = time.monotonic()
-        gathered = gather_signals(user, {**item, "target_crop": target_crop}, attrs, config)
+        gathered = gather_signals(user, {**item, "target_crop": target_crop, "photo": photo}, attrs, config, early)
         timings["signals_ms"] = elapsed_ms(mark)
         signals["errors"] = gathered["errors"]
         size = gathered["closet_size"]
@@ -516,7 +575,7 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
         elif needs_not_seen_phrase(closet_small, matches, zone):
             payload["note"] = f"The closet is small and nothing matched. The reason must include: {NOT_SEEN_PHRASE}."
         mark = time.monotonic()
-        reply, claude_errors = ask_claude(payload, images)
+        reply, claude_errors = ask_claude(payload, images, deadline)
         timings["claude_ms"] = elapsed_ms(mark)
         if reply is not None:
             checked = apply_guardrails(reply, allowed=allowed, matches=matches, best=best,
@@ -541,6 +600,8 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
         if matched_ids:
             missing = [i for i in matched_ids if i not in docs]
             docs.update(closet_docs(missing))
+
+    pool.shutdown(wait=False)
 
     # ---------- build the response ----------
     matched_docs = [docs[i] for i in matched_ids if i in docs]

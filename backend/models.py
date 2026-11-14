@@ -242,6 +242,10 @@ class AnalyzeResponse(BaseModel):
                           "(not apparel, attributes failed, embedding or Atlas error): say nothing about ownership")
     wears_estimated: bool = Field(False, description="True when expected_wears is a rough category estimate. "
                                                       "Show it labeled as an estimate")
+    attributes: Attributes | None = Field(
+        None, description="Part 2 attributes of the item being added (POST /analyze only). null when attributes "
+                          "failed or the item is not apparel. The extension's ownership question reads them, so it "
+                          "needs no second /attributes call")
 
 
 class ReadPageResponse(BaseModel):

@@ -4,6 +4,7 @@ MongoDB are all faked. No network, no database writes.
 Run from the project root:  python -m unittest discover tests
 """
 import logging
+import time
 import sys
 import unittest
 from datetime import datetime, timezone
@@ -85,7 +86,8 @@ class EngineTest(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def fake_understand(self, item):
+    def fake_understand(self, item, image_bytes=None):
+        self.understand_images = getattr(self, "understand_images", []) + [image_bytes]
         if isinstance(self.attrs, Exception):
             raise self.attrs
         return self.attrs
@@ -313,6 +315,54 @@ class FallbackTests(EngineTest):
         self.assertEqual(resp.matched_closet_item.id, ID_A)
         self.assertIn("Black slim jeans", resp.reason)
         self.assertEqual(len(rec["signals"]["claude_errors"]), 2)
+
+    def test_claude_timeouts_are_cut_to_the_deadline(self):
+        self.matches = [match(ID_A, 0.60)]
+        self.replies = [TimeoutError("slow"), TimeoutError("slow again")]
+        with mock.patch.object(v, "DEADLINE_S", 3.0):
+            resp, rec = self.run_engine()
+        self.assertEqual([c["timeout"] for c in self.calls], [3.0, 3.0])
+        self.assertEqual(resp.decided_by, "fallback")
+
+    def test_no_claude_attempt_without_time_left(self):
+        self.matches = [match(ID_A, 0.60)]
+        with mock.patch.object(v, "DEADLINE_S", 1.0):
+            resp, rec = self.run_engine()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(resp.decided_by, "fallback")
+        self.assertEqual(resp.verdict, "good_buy")
+        self.assertIn("skipped", rec["signals"]["claude_errors"][0])
+
+    def test_slow_attributes_end_in_code_only_verdict(self):
+        def slow_understand(item, image_bytes=None):
+            time.sleep(0.3)
+            return JEANS
+        with mock.patch.object(v, "ATTRIBUTES_DEADLINE_S", 0.05), \
+                mock.patch.object(v.verdict_deps, "understand_for_verdict", side_effect=slow_understand):
+            resp, rec = self.run_engine()
+        self.assertEqual(rec["signals"]["path"], "attributes_failed")
+        self.assertEqual(resp.verdict, "good_buy")
+        self.assertEqual(resp.decided_by, "code")
+        self.assertEqual(self.calls, [])
+
+    def test_slow_photo_is_skipped_for_text_only_attributes(self):
+        def slow_fetch(url):
+            time.sleep(0.3)
+            return b"\xff\xd8jpeg"
+        self.replies = [reply("good_buy", reason="Nothing in your closet looks quite like these.")]
+        with mock.patch.object(v, "IMAGE_WAIT_S", 0.05), mock.patch.object(v, "fetch_image", side_effect=slow_fetch):
+            resp, rec = self.run_engine()
+        self.assertEqual(self.understand_images, [None])
+        self.assertEqual(rec["signals"]["path"], "matched")
+        self.assertEqual(resp.verdict, "good_buy")
+
+    def test_photo_is_fetched_once_and_reused(self):
+        self.matches = [match(ID_A, 0.80)]  # gray band without a target crop: Claude gets the item photo
+        self.replies = [reply("good_buy", reason="Close to your black slim jeans, but the wash reads different.")]
+        resp, _ = self.run_engine()
+        self.assertEqual(v.fetch_image.call_count, 1)
+        self.assertEqual(self.understand_images, [b"\xff\xd8jpeg"])
+        self.assertEqual(self.calls[0]["images"][0]["source"]["media_type"], "image/jpeg")
 
     def test_fallback_in_gray_band_is_conservative(self):
         self.matches = [match(ID_A, 0.77)]  # gray, but below t_c

@@ -30,10 +30,12 @@ from backend.services.embeddings import EmbeddingError
 from backend.services.money import money_kept, on_skip, savings_summary
 from backend.services.verdict import decide
 from backend.settings import ROOT
+from backend.warmup import start_warmup
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_indexes()
+    start_warmup()  # background: the first check after a restart is as fast as the rest
     yield
 
 
@@ -172,6 +174,12 @@ def analyze(body: m.AnalyzeRequest, http: Response, user=Depends(current_user)):
     """Part 5 verdict engine (backend/services/verdict.py). Always answers: failures end in a code-only verdict.
     Server-Timing lists the engine's stage times (attributes, signals, claude, ...) in ms."""
     response, record = decide(user, body.item, save=True)
+    stored = record.get("attributes")
+    if stored and stored.get("category") and stored.get("is_apparel") is not False:
+        try:
+            response.attributes = m.Attributes(**{k: stored.get(k) for k in m.Attributes.model_fields})
+        except ValueError:
+            pass  # the ownership question then reads them with /attributes, as before
     timings = record["signals"].get("timings") or {}
     http.headers["Server-Timing"] = ", ".join(f"{k.removesuffix('_ms')};dur={v}" for k, v in timings.items())
     timing_log.info("timing /analyze decided_by=%s %s", response.decided_by,
