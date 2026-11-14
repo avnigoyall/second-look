@@ -6,8 +6,9 @@ Built so far:
 
 - **Part 0: Foundation.** API, database, auth, extension messaging, and dashboard. Verdicts are still stubs with canned data.
 - **Part 1: Capture.** The extension reads the product a shopper adds to their cart, shows the verdict card on the page, tracks the items checked in this session, and notices when one is removed from the cart.
+- **Part 2: Item understanding.** `POST /attributes` sends one item (image plus text) to Gemini and returns attributes from `attributes.json`, plus the `attribute_string` that Part 3 embeds.
 
-Not built yet: real verdict logic, closet matching, Nessie, trend logic, and the cart summary UI.
+Not built yet: embeddings, real verdict logic, closet matching, Nessie, trend logic, and the cart summary UI.
 
 ## Layout
 
@@ -18,7 +19,8 @@ Not built yet: real verdict logic, closet matching, Nessie, trend logic, and the
 | `dashboard/` | One static page, served by the backend at `/dashboard-ui` |
 | `docs/` | `store-test-results.md`, the table for testing real stores by hand |
 | `seed/` | `seed.py` plus a `photos/` folder for the demo user's closet |
-| `scripts/` | `check_keys.py` checks each external service key |
+| `scripts/` | `check_keys.py` checks each external service key. `eval_attributes.py` scores Part 2 |
+| `eval/` | `attributes_eval.csv`, labeled items for the Part 2 eval |
 
 ## Setup
 
@@ -136,6 +138,14 @@ PW_PATH=/path/to/node_modules/playwright node extension/tests/e2e/e2e.cjs
 
 Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension/tests/e2e/shots/` (git-ignored). Each run signs up a throwaway `e2e<timestamp>@example.com` user.
 
+### Part 2 attribute eval
+
+`eval/attributes_eval.csv` has the columns `source` (image URL, or image path relative to the project root), `name`, `expected_category`, and `expected_color_family`. It calls the service directly, so no server or login is needed. Target: 90% on category and color_family.
+
+```bash
+python scripts/eval_attributes.py                  # or pass another CSV path
+```
+
 ## Assumptions and choices
 
 - **Git** was already initialized and connected to GitHub, so `git init` was not run again.
@@ -172,3 +182,22 @@ Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension
 - **`[data-price]`** is used as-is only when it reads like a price ("49.95" or "$49.95"). A whole number like "4995" might be cents, so the element's visible text is used instead.
 - **Currency text** must be short (40 characters or less) and mostly price: after removing the numbers and currency, at most 15 letters may remain. "Sale price $39.90" passes, "Free shipping over $50" does not.
 - **"save"** is excluded only as a whole word, so a class like `saved-items` is not affected but a button labelled "Save to wishlist" is.
+
+### Part 2 assumptions
+
+- **Code layout:** the service is `backend/services/item_understanding.py` and the endpoints are in `backend/routers/attributes.py`. These are new folders, because the request asked for a service module and its own router. `/attributes` request and response models are in `backend/models.py` with the other API models.
+- **`fabric_confidence` conflict (not changed, needs a decision):** Part 2 returns `"high"`, `"medium"`, or `"low"`, as requested. The Part 0 `Attributes` model (used by `POST /closet` and stored on closet items and verdicts) defines it as a number from 0 to 1. Part 2 does not write to the database, so nothing breaks today, but Part 3 must pick one format before it stores Part 2 output.
+- **Values with no "unknown":** `category`, `color_family`, and `cut` have no "unknown" or "other" value in `attributes.json`. For these, the schema allows `null` and the prompt says to use it when unsure. `fabric` uses "unknown" and `style` uses "other". This rule is computed from the file, so no value list is hardcoded.
+- **`fabric_confidence` levels:** `high` when the text states the material ("100% cotton"), `medium` when the text only implies it ("denim jacket"), `low` when guessed from the image or with no hint. If `fabric` is "unknown" or null, the confidence is forced to `low`.
+- **`is_apparel`:** true for clothing, shoes, bags, and wearable accessories (everything the category list covers). For other items Gemini returns false, and most labels come back null, "unknown", or "other".
+- **Main garment:** the prompt uses the product name and breadcrumb to choose which item to label on a model photo (for example "pants" means label the pants, even if a jacket is more visible). The first prompt version labeled the jacket in eval row 2. This rule fixed it.
+- **Output checks:** the reply is checked against `attributes.json` on the server too. A value outside the file counts as a malformed reply and triggers the retry. The description is cut to 25 words.
+- **Retry:** each Gemini attempt has a 20 second timeout. Any API error or malformed reply is retried once. After 2 failures, every attribute is null, `status` is `"attributes_failed"`, and `attribute_string` is an empty string. `/attributes` still returns HTTP 200 in that case, so callers check `status`.
+- **Latency:** with the current `GEMINI_MODEL` (`gemini-3.5-flash-lite`), three image calls to `/attributes` took 1.0 to 1.4 seconds each, image fetch included.
+- **`attribute_string`:** uses the requested template. It skips null values and also "unknown" and "other", because those words add noise to embeddings. The period after "style" is kept even when there is no style, for example `"black slim pants. A pair of..."`.
+- **Images:** `fetch_image` accepts only http and https URLs, follows redirects, rejects non-image content types and files over 15 MB, resizes to 1024px on the longest side, and returns JPEG bytes. Formats Pillow cannot read (for example SVG) count as a failed fetch, and the call runs text only.
+- **Server-side fetch:** the backend downloads any URL a logged-in user sends. That is acceptable for a laptop demo. Do not expose this endpoint publicly without blocking private network addresses.
+- **Text limits:** `description` and `text` are each cut to 4000 characters before they go to Gemini.
+- **`GET /config/attributes`** needs no login, because the values are not secret.
+- **Eval:** the script calls the service directly instead of HTTP. Starter rows start their name with `EXAMPLE:`. They are scored like other rows, and the prefix is stripped before the name goes to Gemini. Both starter rows use public Uniqlo product images. The name "Smart ankle pants" in row 2 was chosen by me to test main-garment selection on an outfit photo. It is not the store's own name for that product. Delete both rows when the real 20 rows are in.
+- **Brand:** the prompt forbids naming a brand. The test images show a Uniqlo logo, and no description mentioned it.

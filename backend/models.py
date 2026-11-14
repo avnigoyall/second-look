@@ -134,6 +134,14 @@ class ReadPageRequest(BaseModel):
     image_url: str | None = None
 
 
+class AttributesRequest(BaseModel):
+    name: str = Field(min_length=1)
+    image_url: str | None = None
+    description: str | None = Field(None, max_length=20000)
+    breadcrumb: str | None = Field(None, max_length=2000)
+    text: str | None = Field(None, max_length=50000, description="Extra page text. Only the first 4000 characters are used")
+
+
 class ClosetCreateRequest(BaseModel):
     name: str | None = None
     image_base64: str | None = Field(None, description="Bare base64 or a data URL")
@@ -174,6 +182,28 @@ class ReadPageResponse(BaseModel):
     name: str | None = None
     price: float | None = None
     image_url: str | None = None
+
+
+class ItemAttributesResponse(BaseModel):
+    """Part 2 item understanding. Every attribute is null when status is "attributes_failed"."""
+    category: str | None = None
+    color_family: str | None = None
+    fabric: str | None = None
+    fabric_confidence: Literal["high", "medium", "low"] | None = None
+    cut: str | None = None
+    style: str | None = None
+    description: str | None = Field(None, description="25 words at most")
+    is_apparel: bool | None = None
+    status: Literal["ok", "attributes_failed"]
+    attribute_string: str = Field(description="The text Part 3 embeds. Empty when status is attributes_failed")
+
+    @model_validator(mode="after")
+    def check_allowed_values(self):
+        for field, allowed in ATTRIBUTES.items():
+            value = getattr(self, field)
+            if value is not None and value not in allowed:
+                raise ValueError(f"{field} must be one of {allowed}, got '{value}'")
+        return self
 
 
 class Balances(BaseModel):

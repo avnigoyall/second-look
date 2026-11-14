@@ -14,6 +14,7 @@ from backend.auth import check_password, create_token, current_user, hash_passwo
 from backend.db import client, closet_items, ensure_indexes, trends, users, verdicts
 from backend.images import decode_base64_image, to_data_url
 from backend.page_reader import ReadPageError, read_page
+from backend.routers import attributes as attributes_router
 from backend.settings import ROOT
 
 @asynccontextmanager
@@ -26,6 +27,7 @@ app = FastAPI(title="Second Look API", version="0.1.0", lifespan=lifespan)
 
 # Hackathon, local only: allow every origin so the extension and dashboard can call us.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(attributes_router.router)
 
 
 def now():
