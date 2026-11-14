@@ -320,6 +320,7 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 9 | Description `Second Look skip <id>`; no-price shows pending | `Second Look skip: <item> [<id>]`; no-price shows "Skipped. No price, so nothing moved" | Contract |
 | 14 | Free texts got a fixed help reply | `POST /imessage/ask` with per-account context; `imessage_messages` history | Contract (additive) |
 | 14 | Phones added to Photon by hand in the dashboard | Auto-assignment at signup and `POST /imessage/connect`, `GET /imessage/status`; no invite email; replies from the receiving line | Contract (additive) |
+| 14 | A yes could answer an old verdict that never asked | `ask_ownership` stored; `/own` answers only the latest verdict that asked | Code |
 | 7 | Card buttons always "Skip it" then "Buy anyway" | Avni: good_buy shows "Buy it" first and highlighted, then "Skip it anyway". Card harness and E2E updated | Contract |
 
 ## 13. Open items
@@ -347,7 +348,7 @@ Backend additions (for CONTRACT.md)
 Main agent notes (merged from `feat/photon-imessage-agent` on Nov 14):
 - Merged with no conflicts. Live check on a separate port with a temporary secret: wrong secret 401, unlinked phone 404, link normalizes phone formats, analyze returned a verdict and message in 3.1 s, own yes added the item.
 - The Node agent lives in `imessage/` (Photon SDK, polling). It needs `PHOTON_*` values and the same `IMESSAGE_AGENT_SECRET` as the backend. The backend answers 503 on `/imessage/*` until `IMESSAGE_AGENT_SECRET` is set in the repo-root `.env`.
-- Known issue: `/imessage/own` answers the latest unanswered iMessage verdict, including have_this_look verdicts that never asked (`ask_ownership: false`). A later "yes" can then add a duplicate closet item. Fix: store `ask_ownership` on the verdict doc and filter on it.
+- Fixed (Nov 14, `fix/imessage-own`): `/imessage/analyze` stores `ask_ownership` on the verdict doc. `/imessage/own` answers only the latest iMessage verdict in the 24 h window, and only when it asked (`ask_ownership: true`) and has no answer yet. A newer photo replaces an older open question, a have_this_look verdict can never be answered, and a second "yes" adds nothing. Verdicts stored before the flag are not answerable. Otherwise the reply is "Send me a photo of something you're thinking about buying first."
 - Known issue: `/imessage/link` trusts any email (documented hackathon trust model). Needs a confirmation code before real users.
 - Closet items added by "yes" have no description, so they share the quick-add matching gap (section 5). Fixed Nov 14 by `has_description` matching.
 - Account chat (Nov 14): `POST /imessage/ask {phone, text}` returns `{message}` (same secret, 404 `phone_not_linked`, never 5xx). Claude answers in plain text, at most about 3 sentences, only from a per-account context built in code (`backend/services/account_context.py`): who (email, preference note, member since, settings, Nessie linked), closet (counts by category, newest 80 items), savings (money kept, items skipped, CO2e, Nessie balances and last 5 transfers when enabled), last 10 verdicts, last 8 messages. Context reads only by this user's id. 8 s timeout with a friendly fallback.
