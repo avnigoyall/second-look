@@ -193,6 +193,13 @@
     const setStatus = (text, isError = false) => {
       status.textContent = text;
       status.classList.toggle("error", isError);
+      status.classList.remove("saved");
+    };
+    // Money actually moved: a check icon and ink text, so the confirmation reads as done.
+    const setSaved = (text) => {
+      setStatus("");
+      status.classList.add("saved");
+      status.append(el("span", { class: "saved-icon", html: ICONS.check }), el("span", { text }));
     };
 
     const skip = el("button", { class: "btn primary", text: "Skip it" });
@@ -210,19 +217,26 @@
       status,
     );
 
-    async function act(action, doneText) {
+    async function act(action) {
       skip.disabled = buy.disabled = true;
       setStatus("Saving...");
+      let res;
       try {
-        await handlers.onAction(action);
-        setStatus(doneText);
+        res = await handlers.onAction(action);
       } catch (err) {
+        // A timeout may still have reached the server, so a Skip stays skipped (no second
+        // transfer). Any other failure saved nothing: show it and let the user try again.
+        if (action === "skipped" && err.code === "timeout") return setStatus(SKIP_PENDING);
         skip.disabled = buy.disabled = false;
-        setStatus(err.message, true);
+        return setStatus(err.message, true);
       }
+      if (action === "bought") return setStatus("Marked as bought.");
+      const moved = movedCents(res);
+      if (moved == null) setStatus(SKIP_PENDING);
+      else setSaved(`Skipped. ${money(moved / 100)} moved to savings`);
     }
-    skip.addEventListener("click", () => act("skipped", "Skipped. Nice save."));
-    buy.addEventListener("click", () => act("bought", "Marked as bought."));
+    skip.addEventListener("click", () => act("skipped"));
+    buy.addEventListener("click", () => act("bought"));
 
     async function rate(value, button, other) {
       setStatus("Saving...");
@@ -246,6 +260,20 @@
         if (actions.isConnected) b.insertBefore(ownershipBlock(options, onAnswer), actions);
       },
     };
+  }
+
+  // ---------- Skip it confirmation ----------
+
+  const SKIP_PENDING = "Skipped. Savings update pending";
+
+  // POST /action returns transfer { status, amount_cents } when the savings transfer ran.
+  // Only "done" with a positive amount counts as moved. pending, failed, no_price, or no
+  // transfer field at all (older backend) read as pending, never as an error.
+  function movedCents(res) {
+    const t = res?.transfer;
+    if (t?.status !== "done") return null;
+    const cents = Number(t.amount_cents);
+    return Number.isFinite(cents) && cents > 0 ? cents : null;
   }
 
   // ---------- verdict details ----------

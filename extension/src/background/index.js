@@ -116,11 +116,23 @@ async function analyzeItem({ item }) {
   return result;
 }
 
+// A timeout may still have reached the server, so the session records the action then too and
+// the card shows the skip as pending. Other failures recorded nothing and are rethrown as is.
 async function sendAction({ verdictId, action }) {
-  const result = await api("/action", { method: "POST", body: { verdict_id: verdictId, action } });
+  let result;
+  try {
+    result = await api("/action", { method: "POST", body: { verdict_id: verdictId, action } });
+  } catch (err) {
+    if (err.code === "timeout") await markSession(verdictId, action);
+    throw err;
+  }
+  await markSession(verdictId, action);
+  return result;
+}
+
+async function markSession(verdictId, action) {
   const entry = (await SecondLookSession.list()).find((e) => e.verdict_id === verdictId);
   if (entry) await SecondLookSession.update(entry.id, { status: action }); // skipped | bought
-  return result;
 }
 
 // Paste-a-link: open the URL in a background tab, run readItem() there, then close the tab.
