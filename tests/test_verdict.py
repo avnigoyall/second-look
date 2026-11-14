@@ -288,10 +288,122 @@ class GuardrailTests(EngineTest):
 
     def test_word_cap_is_30(self):
         self.assertEqual(v.REASON_MAX_WORDS, 30)
+        long_name = {**match(ID_A, 0.6, name=" ".join(["Very"] * 20) + " jeans"),
+                     "attributes": {"category": "jeans", "color_family": "black", "cut": "regular",
+                                    "fabric": "cotton", "style": "basic"}}
+        item = {**JEANS, "color_family": "blue", "cut": "wide", "fabric": "denim", "style": "streetwear"}
         for verdict in v.PRIORITY:
-            text = v.template_reason(verdict, match_name="black slim jeans", trend_name="Barrel-leg jeans",
-                                     closet_small=True, zone="gray")
-            self.assertLessEqual(len(text.split()), 30)
+            for named in (match(ID_A, 0.6), long_name, None):
+                for small in (True, False):
+                    text = v.template_reason(verdict, match=named, attrs=item, trend_name="Barrel-leg jeans",
+                                             closet_small=small, has_matches=named is not None, zone="none")
+                    self.assertLessEqual(len(text.split()), 30, text)
+
+
+JEANS_BLUE_WIDE = {**JEANS, "color_family": "blue", "cut": "wide", "description": "Blue wide leg jeans."}
+
+
+def black_regular_jeans(id_, score):
+    return {**match(id_, score, name="Black jeans"),
+            "attributes": {"category": "jeans", "color_family": "black", "cut": "regular", "fabric": "denim",
+                           "style": "basic"}}
+
+
+class WordingTests(EngineTest):
+    """The reason names the closest closet item and how it differs; it never says "I don't see this" when
+    there is a candidate match, and a have_this_look reason commits."""
+
+    def test_small_closet_below_threshold_match_names_it_without_not_seen(self):
+        # The real case from Nov 14: 9-item closet, Black jeans at 0.613 with a different color.
+        self.attrs, self.size = dict(JEANS_BLUE_WIDE), 9
+        self.matches = [black_regular_jeans(ID_A, 0.613)]
+        self.replies = [reply("good_buy", reason="Closest in your closet: your black jeans. These are blue and wide "
+                                                 "leg, so they add something new.")]
+        resp, rec = self.run_engine()
+        self.assertEqual((resp.verdict, resp.zone), ("good_buy", "none"))
+        self.assertEqual(rec["overrides"], [])
+        self.assertNotIn("don't see", resp.reason)
+        closest = self.calls[0]["payload"]["closest_match"]
+        self.assertEqual(closest["name"], "Black jeans")
+        self.assertFalse(closest["same_color_family"])
+        self.assertEqual([d["field"] for d in closest["differences"]], ["color_family", "cut"])
+        self.assertNotIn("note", self.calls[0]["payload"])
+
+    def test_not_seen_while_naming_a_closet_item_is_replaced(self):
+        self.attrs, self.size = dict(JEANS_BLUE_WIDE), 9
+        self.matches = [black_regular_jeans(ID_A, 0.613)]
+        self.replies = [reply("good_buy", reason="I don't see this in your closet. Your black jeans are a different "
+                                                 "color and cut, so these add something new to your wardrobe.")]
+        resp, rec = self.run_engine()
+        self.assertEqual(rec["override"], {"rule": "not_seen_with_match", "code_said": "good_buy",
+                                           "claude_said": "good_buy"})
+        self.assertEqual(resp.reason, "Closest in your closet: Black jeans. These are blue and wide leg, "
+                                      "so they add something new.")
+        self.assertEqual(resp.verdict, "good_buy")
+
+    def test_good_buy_that_does_not_name_the_closest_item_gets_a_template(self):
+        self.attrs, self.size = dict(JEANS_BLUE_WIDE), 9
+        self.matches = [black_regular_jeans(ID_A, 0.613)]
+        self.replies = [reply("good_buy", reason="A versatile pair of jeans that pairs with most tops.")]
+        resp, rec = self.run_engine()
+        self.assertEqual(rec["override"]["rule"], "closest_item_not_named")
+        self.assertTrue(resp.reason.startswith("Closest in your closet: Black jeans."))
+
+    def test_truly_empty_category_says_i_dont_see_this(self):
+        self.attrs, self.size, self.matches = dict(JEANS_BLUE_WIDE), 9, []
+        self.replies = [reply("good_buy", reason="These blue wide leg jeans are an easy everyday pick.")]
+        resp, rec = self.run_engine()
+        self.assertIsNone(self.calls[0]["payload"]["closest_match"])
+        self.assertEqual(rec["override"]["rule"], "missing_not_seen_phrase")
+        self.assertTrue(resp.reason.startswith("I don't see this in your closet"))
+
+    def test_hedged_have_this_look_is_replaced_with_a_committed_reason(self):
+        # The real gray-band case: Claude picked have_this_look but wrote "it may be a lookalike".
+        tee = {**JEANS, "category": "tee", "color_family": "black", "cut": "regular", "fabric": "cotton",
+               "style": "streetwear"}
+        self.attrs = tee
+        black_tee = {**match(ID_A, 0.77, name="Black tee"),
+                     "attributes": {"category": "tee", "color_family": "black", "cut": "regular",
+                                    "fabric": "cotton", "style": "basic"}}
+        self.matches = [black_tee]
+        self.replies = [reply("have_this_look", ids=[ID_A], reason="You already have a plain black crew neck tee. "
+                              "This one differs mainly by its bold front graphic, so it may be a lookalike.")]
+        resp, rec = self.run_engine()
+        self.assertEqual(resp.verdict, "have_this_look")
+        self.assertEqual(rec["override"], {"rule": "hedged_have_this_look", "code_said": "have_this_look",
+                                           "claude_said": "have_this_look"})
+        self.assertEqual(resp.reason, "This gives the same look as your Black tee. "
+                                      "The streetwear style is the only difference.")
+        self.assertIsNone(v.HEDGE_WORDS.search(resp.reason))
+        self.assertEqual(resp.decided_by, "claude")  # the verdict stood, only the reason was replaced
+
+    def test_committed_have_this_look_stands(self):
+        self.matches = [match(ID_A, 0.81)]
+        self.replies = [reply("have_this_look", ids=[ID_A], reason="Same look as your black slim jeans; only the "
+                                                                   "wash is a touch lighter.")]
+        resp, rec = self.run_engine()
+        self.assertEqual(rec["overrides"], [])
+        self.assertIn("only the wash", resp.reason)
+
+    def test_have_this_look_must_name_the_matched_item(self):
+        self.matches = [match(ID_A, 0.81)]
+        self.replies = [reply("have_this_look", ids=[ID_A], reason="You already own this look.")]
+        resp, rec = self.run_engine()
+        self.assertEqual(rec["override"]["rule"], "matched_item_not_named")
+        self.assertIn("Black slim jeans", resp.reason)
+
+    def test_fallback_good_buy_names_the_closest_item(self):
+        self.attrs = dict(JEANS_BLUE_WIDE)
+        self.matches = [black_regular_jeans(ID_A, 0.61)]
+        self.replies = [RuntimeError("down"), RuntimeError("down")]
+        resp, _ = self.run_engine()
+        self.assertEqual(resp.decided_by, "fallback")
+        self.assertTrue(resp.reason.startswith("Closest in your closet: Black jeans."))
+
+    def test_names_item_is_loose_about_wording(self):
+        self.assertTrue(v.names_item("Same look as your black crew neck tee.", "Uniqlo crew neck short sleeve tee"))
+        self.assertTrue(v.names_item("Your white tees already cover this.", "White tee"))
+        self.assertFalse(v.names_item("A versatile pick.", "Black jeans"))
 
 
 class FallbackTests(EngineTest):
