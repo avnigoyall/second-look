@@ -1,6 +1,6 @@
 """Pydantic request and response models. FastAPI's /docs page is built from these, so they are the API contract."""
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -9,7 +9,10 @@ from backend.trends import TrendAlternative, TrendFeatures, TrendSource
 
 VerdictType = Literal["have_this_look", "micro_trend", "good_buy"]
 ProfileType = Literal["demo", "new", "real"]
-ClosetSource = Literal["snap", "auto_add", "ownership_answer", "quick_add"]
+ClosetSource = Literal["snap", "auto_add", "ownership_answer", "quick_add",
+                       "ingest_photo", "ingest_video", "ingest_text"]
+ClosetStatus = Literal["owned", "incoming"]
+FabricConfidence = Literal["high", "medium", "low"]
 
 
 # ---------- shared pieces ----------
@@ -19,7 +22,8 @@ class Attributes(BaseModel):
     category: str | None = None
     color_family: str | None = None
     fabric: str | None = None
-    fabric_confidence: float | None = Field(None, ge=0, le=1)
+    # Part 0 used a 0 to 1 number. Part 2 and Part 3 store "high" | "medium" | "low". Both are accepted.
+    fabric_confidence: Annotated[float, Field(ge=0, le=1)] | FabricConfidence | None = None
     cut: str | None = None
     style: str | None = None
 
@@ -65,6 +69,7 @@ class ClosetItem(BaseModel):
     id: str
     user_id: str
     source: ClosetSource
+    status: ClosetStatus = Field("owned", description="A stored document with no status is owned")
     name: str
     image_data: str | None = None
     attributes: Attributes | None = None
@@ -149,6 +154,14 @@ class ReadPageRequest(BaseModel):
     image_url: str | None = None
 
 
+class AttributesRequest(BaseModel):
+    name: str = Field(min_length=1)
+    image_url: str | None = None
+    description: str | None = Field(None, max_length=20000)
+    breadcrumb: str | None = Field(None, max_length=2000)
+    text: str | None = Field(None, max_length=50000, description="Extra page text. Only the first 4000 characters are used")
+
+
 class ClosetCreateRequest(BaseModel):
     name: str | None = None
     image_base64: str | None = Field(None, description="Bare base64 or a data URL")
@@ -191,6 +204,28 @@ class ReadPageResponse(BaseModel):
     image_url: str | None = None
 
 
+class ItemAttributesResponse(BaseModel):
+    """Part 2 item understanding. Every attribute is null when status is "attributes_failed"."""
+    category: str | None = None
+    color_family: str | None = None
+    fabric: str | None = None
+    fabric_confidence: Literal["high", "medium", "low"] | None = None
+    cut: str | None = None
+    style: str | None = None
+    description: str | None = Field(None, description="25 words at most")
+    is_apparel: bool | None = None
+    status: Literal["ok", "attributes_failed"]
+    attribute_string: str = Field(description="The text Part 3 embeds. Empty when status is attributes_failed")
+
+    @model_validator(mode="after")
+    def check_allowed_values(self):
+        for field, allowed in ATTRIBUTES.items():
+            value = getattr(self, field)
+            if value is not None and value not in allowed:
+                raise ValueError(f"{field} must be one of {allowed}, got '{value}'")
+        return self
+
+
 class Balances(BaseModel):
     """Placeholder until Nessie is wired in. Nessie v2 reports integer cents."""
     checking_cents: int | None = None
@@ -213,6 +248,105 @@ class ClosetItemResponse(BaseModel):
 
 class ClosetListResponse(BaseModel):
     items: list[ClosetItem]
+
+
+# ---------- Part 3: closet intake, matching, ownership, settings ----------
+
+class DuplicateRef(BaseModel):
+    id: str
+    name: str
+    score: float = Field(description="Cosine similarity to the existing closet item")
+
+
+class CandidateItem(BaseModel):
+    """A garment found by closet intake, waiting for the user to review and save it."""
+    id: str
+    origin: Literal["photo", "video", "text"]
+    name: str
+    attributes: Attributes
+    description: str = ""
+    confidence: float = Field(ge=0, le=1)
+    low_confidence: bool = False
+    image_index: int | None = None
+    frame: int | None = None
+    box_2d: list[int] | None = Field(None, description="[ymin, xmin, ymax, xmax] normalized 0 to 1000")
+    brand_visible: str | None = None
+    seen_count: int = Field(1, description="How many photos or frames showed this item after merging")
+    thumbnail: str | None = Field(None, description="JPEG data URL, 600px longest side")
+    likely_duplicate_of: DuplicateRef | None = None
+
+
+class IngestProgress(BaseModel):
+    step: str
+    done: int
+    total: int
+
+
+class IngestStartResponse(BaseModel):
+    job_id: str
+
+
+class IngestJobResponse(BaseModel):
+    job_id: str
+    status: Literal["queued", "running", "done", "failed", "saved"]
+    progress: IngestProgress
+    items: list[CandidateItem] = Field([], description="Filled when status is done or saved")
+    warnings: list[str] = []
+    error: str | None = None
+    saved_count: int | None = None
+
+
+class SaveItem(BaseModel):
+    candidate_id: str | None = Field(None, description="Links the item to its crop. Omit for items added by text")
+    name: str = Field(min_length=1, max_length=120)
+    attributes: Attributes
+    description: str = Field("", max_length=500)
+
+
+class IngestSaveRequest(BaseModel):
+    items: list[SaveItem] = Field(max_length=100)
+
+
+class IngestSaveResponse(BaseModel):
+    saved: int
+    ids: list[str]
+
+
+class ParseTextRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class CandidateListResponse(BaseModel):
+    items: list[CandidateItem]
+
+
+class OwnershipOptionsRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    attributes: Attributes
+
+
+class OwnershipOption(BaseModel):
+    label: str
+    attributes: Attributes
+
+
+class OwnershipOptionsResponse(BaseModel):
+    show: bool = Field(description="True only while the closet has fewer than 10 items")
+    options: list[OwnershipOption] = []
+    staple_idea: str | None = Field(None, description='One sentence, starts with "Idea: "')
+
+
+class OwnershipAnswerRequest(BaseModel):
+    attributes: Attributes
+    name: str | None = Field(None, max_length=120, description='Defaults to "<color_family> <category>"')
+
+
+class Settings(BaseModel):
+    auto_add_purchases: bool = True
+
+
+class SettingsPatch(BaseModel):
+    auto_add_purchases: bool | None = None
 
 
 class DashboardResponse(BaseModel):

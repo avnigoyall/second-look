@@ -5,10 +5,10 @@ const path = require("path");
 const fs = require("fs");
 const { chromium } = require(process.env.PW_PATH || "playwright");
 
-const EXT = path.resolve(__dirname, "../..");
+const EXT = process.env.EXT_PATH || path.resolve(__dirname, "../..");
 const OUT = path.join(__dirname, "shots");
 const FIX = "http://127.0.0.1:8765";
-const API = "http://localhost:8000";
+const API = process.env.API_BASE || "http://localhost:8000";
 fs.mkdirSync(OUT, { recursive: true });
 
 const results = [];
@@ -314,6 +314,78 @@ const RECORDER = `(() => {
     await page.click("#add-tile-self");
     const shown = await card(page).locator(".badge").waitFor({ timeout: 15000 }).then(() => true, () => false);
     (shown ? pass : fail)("6d. Add to Bag in a tile that links to the current page triggers");
+  }
+
+  // ---- 7. Bug A: ProductGroup variant choice and displayed price ----
+  // 7a. Product code in the URL picks the Navy blue variant; displayed regular price beats a
+  //     stale JSON-LD price; the "Member price" is skipped.
+  {
+    const page = await openStore("productpage.1101074044.html");
+    const rep = await diagnoseOn(page);
+    const j = rep.tiers.jsonld;
+    (j.variant_match === "code" && j.variant_color === "navy blue" && j.price === 24.99 ? pass : fail)(
+      "7a. variant chosen by product code in URL (Navy blue, not first variant White)", `match=${j.variant_match} color=${j.variant_color} jsonld price=${j.price}`);
+    (rep.item?.image_url?.endsWith("/img/navy.jpg") ? pass : fail)("7a. matched variant's image used", rep.item?.image_url);
+    (rep.item?.name === "Regular Fit T-shirt" ? pass : fail)("7a. group name used", rep.item?.name);
+    const pc = rep.price_check;
+    (rep.item?.price === 19.99 && pc?.structured === 24.99 && pc?.displayed === 19.99 && pc?.winner === "displayed" ? pass : fail)(
+      "7a. displayed regular price $19.99 wins over JSON-LD $24.99, member $15.99 skipped", JSON.stringify(pc));
+    const logs = page.slLogs.join(" | ");
+    (/price check: jsonld 24\.99 vs displayed 19\.99 -> using displayed/.test(logs) ? pass : fail)("7a. both prices and the winner are logged", logs.match(/price check:[^|]*/)?.[0]);
+    await page.click("text=Add to bag");
+    await card(page).locator(".badge").waitFor({ timeout: 15000 });
+    const meta = await card(page).locator(".item-meta").textContent();
+    const img = await card(page).locator(".thumb-img").getAttribute("src");
+    (meta.includes("$19.99") && img.endsWith("/img/navy.jpg") ? pass : fail)("7a. card shows Navy image and $19.99", `${meta} | ${img}`);
+    await sleep(400); await page.screenshot({ path: `${OUT}/7a-hm-variant.png` });
+  }
+  // 7b. No code in the URL: color named in og:title picks "Navy blue" over "Blue"; no variant
+  //     image, so og:image is used; JSON-LD price agrees with the page.
+  {
+    const page = await openStore("hm-color.html");
+    const rep = await diagnoseOn(page);
+    const j = rep.tiers.jsonld;
+    (j.variant_match === "color" && j.variant_color === "navy blue" ? pass : fail)("7b. variant chosen by color (Navy blue beats Blue)", `${j.variant_match} ${j.variant_color}`);
+    (rep.item?.image_url?.endsWith("/img/navy.jpg") && rep.item?.price === 19.99 && rep.price_check?.winner === "jsonld" ? pass : fail)(
+      "7b. og:image fallback, JSON-LD price kept when it matches the page", `${rep.item?.image_url} ${rep.item?.price} ${JSON.stringify(rep.price_check)}`);
+  }
+  // 7c. Nothing matches: group name, price null from JSON-LD, so the DOM price tier runs.
+  {
+    const page = await openStore("hm-nomatch.html");
+    const rep = await diagnoseOn(page);
+    (rep.tiers.jsonld.variant_match === "none" && rep.tiers.jsonld.price === null && rep.item?.name === "Basic Tee" && rep.item?.price === 12.99 && rep.price_source === "dom" ? pass : fail)(
+      "7c. no variant match: group name, DOM price", `${rep.tiers.jsonld.variant_match} ${rep.item?.name} ${rep.item?.price} ${rep.price_source}`);
+  }
+
+  // ---- 8. Bug B: removal waits for the store's confirm dialog ----
+  {
+    const entries = await storage();
+    const shirt = () => storage().then((all) => all.find((e) => e.name === "Relaxed Linen Shirt"));
+    const trousers = () => storage().then((all) => all.find((e) => e.name === "Pleated Wool Trousers"));
+    if ((await shirt())?.status === "removed" || (await trousers())?.status === "removed") fail("8. setup: items already removed");
+    const page = await openStore("cart-confirm.html");
+    const notice = page.locator("#secondlook-shadow-host .notice");
+
+    // 8a. Remove opens "Are you sure?"; nothing is marked yet. Cancel: still nothing after the watch window.
+    await page.click("#r-shirt .remove");
+    await page.locator("#overlay.open").waitFor();
+    await sleep(1000);
+    ((await shirt()).status !== "removed" ? pass : fail)("8a. first Remove click (dialog open) does not mark removed", (await shirt()).status);
+    await page.click("#confirm-cancel");
+    await sleep(7000);
+    ((await shirt()).status !== "removed" && (await notice.count()) === 0 ? pass : fail)("8a. Cancel in the dialog: item not marked removed", (await shirt()).status);
+
+    // 8b. Remove, keep the dialog open past 6 seconds, then confirm: marked removed.
+    await page.click("#r-trousers .remove");
+    await page.locator("#overlay.open").waitFor();
+    await sleep(6500);
+    ((await trousers()).status !== "removed" ? pass : fail)("8b. dialog open for 6.5s: still not marked removed", (await trousers()).status);
+    await page.click("#confirm-remove");
+    await notice.waitFor({ timeout: 3000 });
+    ((await trousers()).status === "removed" && (await shirt()).status !== "removed" ? pass : fail)("8b. Confirm in the dialog marks only that item removed", await notice.textContent());
+    const logs = page.slLogs.join(" | ");
+    (/removal cancelled in dialog: Relaxed Linen Shirt/.test(logs) && /confirmed in dialog/.test(logs) ? pass : fail)("8. cancel and confirm are logged");
+    await sleep(300); await page.screenshot({ path: `${OUT}/8b-confirm-removed.png` });
   }
 
   // ---- console errors ----

@@ -61,6 +61,21 @@
       price_source: t1?.price != null ? "jsonld" : t2?.price != null ? "meta" : null,
     };
 
+    // Price check: when JSON-LD or meta gave a price, compare it with the price shown on the
+    // page. Structured data can be stale or belong to another variant; the displayed price wins.
+    if (item.price != null && (item.price_source === "jsonld" || item.price_source === "meta")) {
+      const shown = global.SecondLookDomPrice.readDisplayedPrice(item.name);
+      const check = { structured: item.price, structured_source: item.price_source, displayed: shown?.price ?? null, winner: item.price_source };
+      if (shown && Math.abs(shown.price - item.price) > 0.005) {
+        item.price = shown.price;
+        item.currency = shown.currency || item.currency;
+        item.price_source = "dom";
+        check.winner = "displayed";
+      }
+      details.price_check = check;
+      console.log(LOG, `price check: ${check.structured_source} ${check.structured} vs displayed ${check.displayed ?? "none"} -> using ${check.winner === "displayed" ? "displayed" : check.structured_source}`);
+    }
+
     // DOM price: when tier 1 or 2 found a name but no price, read the price off the page
     // before spending a Gemini call. Without a name, Gemini runs anyway and fills the price.
     if (item.name && item.price == null) {

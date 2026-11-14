@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Second Look Closet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6b4f'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='white' stroke-width='3.5'/%3E%3Ccircle cx='16' cy='16' r='2.2' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/dashboard-assets/closet.css">
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>Your closet</h1>
+      <p class="muted" id="who"></p>
+    </div>
+    <nav>
+      <a href="/dashboard-ui" class="link">Dashboard</a>
+      <button id="logout" class="ghost" type="button" hidden>Log out</button>
+    </nav>
+  </header>
+
+  <!-- login -->
+  <section id="login-view" class="surface" hidden>
+    <form id="login-form" class="login">
+      <label>Email <input id="email" type="email" autocomplete="username" required></label>
+      <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="primary">Log in</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+
+  <!-- step 1: upload -->
+  <section id="upload-view" class="surface" hidden>
+    <h2>Add clothes you own</h2>
+    <p class="muted">Photos of your closet, a short video walking past your rack, a description, or a mix.</p>
+
+    <label id="drop" class="drop" for="files">
+      <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>
+      <span class="drop-title">Drop photos or a video here</span>
+      <span class="muted small">or click to choose. Up to 15 photos and 1 video. JPEG, PNG, WebP, MP4, MOV</span>
+      <input id="files" type="file" multiple accept="image/jpeg,image/png,image/webp,video/*">
+    </label>
+    <ul id="file-list" class="file-list" aria-label="Selected files"></ul>
+
+    <label class="field">Describe clothes you own (optional)
+      <textarea id="intake-text" rows="2" maxlength="4000" placeholder="two white tees and black jeans"></textarea>
+    </label>
+    <p id="upload-error" class="error" role="alert"></p>
+    <div class="row-end">
+      <button id="start" class="primary" type="button">Find my clothes</button>
+    </div>
+  </section>
+
+  <!-- step 2: progress -->
+  <section id="progress-view" class="surface" hidden aria-live="polite">
+    <h2 id="progress-title">Reading your clothes</h2>
+    <div class="bar" role="progressbar" aria-labelledby="progress-title" aria-valuemin="0" aria-valuemax="100" id="bar">
+      <div class="bar-fill" id="bar-fill"></div>
+    </div>
+    <p class="muted small" id="progress-step">Starting</p>
+    <div id="progress-failed" hidden>
+      <p class="error" id="progress-error" role="alert"></p>
+      <button id="retry" class="ghost" type="button">Start over</button>
+    </div>
+  </section>
+
+  <!-- step 3: review -->
+  <section id="review-view" hidden>
+    <div class="review-head">
+      <div>
+        <h2 id="review-title">Review your items</h2>
+        <p class="muted small">Fix anything that looks wrong, remove what is not yours, then save.</p>
+      </div>
+      <button id="restart" class="ghost" type="button">Start over</button>
+    </div>
+    <ul id="warnings" class="warnings"></ul>
+    <p id="review-empty" class="surface muted" hidden>No clothes found. Add one below, or start over with clearer photos.</p>
+    <ul id="grid" class="grid"></ul>
+
+    <form id="add-form" class="surface add">
+      <label class="field">Add a missing item
+        <input id="add-text" type="text" maxlength="4000" placeholder="navy wool coat" autocomplete="off">
+      </label>
+      <button id="add-btn" class="ghost" type="submit">Add</button>
+      <p id="add-error" class="error" role="alert"></p>
+    </form>
+
+    <div class="savebar">
+      <span id="save-count" class="save-count"></span>
+      <p id="save-error" class="error" role="alert"></p>
+      <button id="save" class="primary" type="button">Save all</button>
+    </div>
+  </section>
+
+  <!-- step 4: saved -->
+  <section id="saved-view" class="surface" hidden aria-live="polite">
+    <div class="saved">
+      <svg class="saved-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+      <div>
+        <h2 id="saved-title">Saved</h2>
+        <p class="muted small">Second Look now checks new purchases against these.</p>
+      </div>
+    </div>
+    <div class="row-end"><button id="again" class="ghost" type="button">Add more</button></div>
+  </section>
+
+  <section id="closet-view" hidden>
+    <h2 class="section-label">In your closet <span id="closet-count" class="muted"></span></h2>
+    <p id="closet-empty" class="muted" hidden>Nothing yet.</p>
+    <ul id="closet" class="mini-grid"></ul>
+  </section>
+</main>
+
+<template id="card-tpl">
+  <li class="card">
+    <div class="thumb"><img alt=""><span class="thumb-text">Added from text</span></div>
+    <div class="card-body">
+      <div class="card-top">
+        <input class="name" type="text" maxlength="120" aria-label="Item name">
+        <button class="remove" type="button" aria-label="Remove item">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="flags"></div>
+      <div class="selects"></div>
+    </div>
+  </li>
+</template>
+
+<script src="/dashboard-assets/closet.js"></script>
+</body>
+</html>

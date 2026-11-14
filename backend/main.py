@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 from bson.errors import InvalidId
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from backend import models as m
@@ -14,8 +15,12 @@ from backend.auth import check_password, create_token, current_user, hash_passwo
 from backend.db import client, closet_items, ensure_indexes, trends, users, verdicts
 from backend.images import decode_base64_image, to_data_url
 from backend.page_reader import ReadPageError, read_page
-from backend.settings import ROOT
+from backend.routers import attributes as attributes_router
+from backend.routers import closet as closet_router
 from backend.routers import trends as trends_router
+from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
+from backend.services.embeddings import EmbeddingError
+from backend.settings import ROOT
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -27,6 +32,9 @@ app = FastAPI(title="Second Look API", version="0.1.0", lifespan=lifespan)
 
 # Hackathon, local only: allow every origin so the extension and dashboard can call us.
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(attributes_router.router)
+app.include_router(closet_router.router)
+app.include_router(trends_router.router)
 
 
 def now():
@@ -49,7 +57,7 @@ def user_out(doc) -> m.User:
 
 def closet_out(doc, include_image=True) -> m.ClosetItem:
     return m.ClosetItem(id=str(doc["_id"]), user_id=str(doc["user_id"]), source=doc["source"],
-                        name=doc["name"], image_data=doc.get("image_data") if include_image else None,
+                        status=doc.get("status") or "owned", name=doc["name"], image_data=doc.get("image_data") if include_image else None,
                         attributes=doc.get("attributes"), description=doc.get("description", ""),
                         created_at=doc["created_at"])
 
@@ -169,10 +177,16 @@ def analyze(body: m.AnalyzeRequest, user=Depends(current_user)):
 
 
 @app.post("/action", response_model=m.ActionResponse)
-def action(body: m.ActionRequest, user=Depends(current_user)):
-    """STUB: records the action. Balances are a placeholder until Nessie is wired in."""
+def action(body: m.ActionRequest, background: BackgroundTasks, user=Depends(current_user)):
+    """STUB: records the action. Balances are a placeholder until Nessie is wired in.
+
+    "bought" also adds the item to the closet as incoming (Part 3), after the response, unless the user
+    turned off settings.auto_add_purchases. The response does not change.
+    """
     doc = own_verdict(body.verdict_id, user)
     verdicts.update_one({"_id": doc["_id"]}, {"$set": {"action": body.action}})
+    if body.action == "bought" and (user.get("settings") or {}).get("auto_add_purchases") is not False:
+        background.add_task(auto_add_purchase, doc["_id"])
     return {"ok": True, "balances": m.Balances()}
 
 
@@ -209,24 +223,26 @@ def add_closet_item(body: m.ClosetCreateRequest, user=Depends(current_user)):
             image_data = to_data_url(decode_base64_image(body.image_base64))
         except Exception:
             raise HTTPException(422, "image_base64 is not a readable image")
-    doc = {
-        "user_id": user["_id"],
-        "source": body.source,
-        "name": body.name or "Untitled item",
-        "image_data": image_data,
-        "attributes": body.attributes.model_dump() if body.attributes else None,
-        "description": "",
-        "embedding": None,
-        "created_at": now(),
-    }
+    try:
+        doc = new_closet_doc(user["_id"], name=body.name or "Untitled item", source=body.source,
+                             attributes=body.attributes.model_dump() if body.attributes else None,
+                             image_data=image_data)
+    except EmbeddingError as e:
+        raise HTTPException(502, f"Could not save: {e}")
     doc["_id"] = closet_items.insert_one(doc).inserted_id
     return {"item": closet_out(doc)}
 
 
 @app.get("/closet", response_model=m.ClosetListResponse)
-def list_closet(include_images: int = 0, user=Depends(current_user)):
-    projection = None if include_images else {"image_data": 0, "embedding": 0}
-    docs = closet_items.find({"user_id": user["_id"]}, projection).sort("created_at", 1)
+def list_closet(include_images: int = 0, status: m.ClosetStatus | None = None, user=Depends(current_user)):
+    """status filters to owned or incoming items (a stored item with no status counts as owned)."""
+    projection = NO_VECTORS if include_images else {**NO_VECTORS, "image_data": 0}
+    query = {"user_id": user["_id"]}
+    if status == "owned":
+        query["status"] = {"$in": ["owned", None]}  # None also matches a missing field
+    elif status == "incoming":
+        query["status"] = "incoming"
+    docs = closet_items.find(query, projection).sort("created_at", 1)
     return {"items": [closet_out(d, include_image=bool(include_images)) for d in docs]}
 
 
@@ -255,4 +271,9 @@ def dashboard_ui():
     return FileResponse(ROOT / "dashboard" / "index.html")
 
 
-app.include_router(trends_router.router)
+@app.get("/closet-ui", include_in_schema=False)
+def closet_ui():
+    return FileResponse(ROOT / "dashboard" / "closet.html")
+
+
+app.mount("/dashboard-assets", StaticFiles(directory=ROOT / "dashboard"), name="dashboard-assets")

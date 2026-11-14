@@ -8,7 +8,7 @@
 
   const { parsePrice, parseCurrency } = global.SecondLookPrice;
   const CURRENCY_RE = /([$€£¥₹]\s?\d[\d.,]*|\d[\d.,]*\s?(€|kr|USD|EUR|GBP|CAD))/;
-  const OLD_PRICE_RE = /\b(was|original|compare|strike|old|regular|list[-_ ]?price|before|crossed)\b/i;
+  const OLD_PRICE_RE = /\b(was|original|compare|strike|old|list[-_ ]?price|before|crossed)\b/i; // not "regular": H&M uses it for the current non-member price
   const MAX_LEFTOVER_LETTERS = 15; // "Sale price $39.90" passes, "Free shipping over $50" does not
 
   function isVisible(el) {
@@ -77,6 +77,24 @@
   }
 
   // Deepest visible elements whose short text is mostly a price.
+  // Labels near a price that mean it is not the regular current price.
+  const NOT_CURRENT_RE = /member|\bwas\b|original/i;
+
+  // The price's own text, the label just before it, and loose text in its parent.
+  function nearbyText(el, candidate) {
+    // The element just before counts as a label only if it is not a price itself
+    // ("Member price $15.99" next to "$19.99" labels the member price, not the regular one).
+    const prev = el.previousElementSibling;
+    const prevRaw = prev ? prev.innerText || "" : "";
+    const prevText = prevRaw.length <= 40 && !CURRENCY_RE.test(prevRaw) ? prevRaw : "";
+    const parentOwn = el.parentElement
+      ? Array.from(el.parentElement.childNodes).filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join(" ")
+      : "";
+    return `${candidate} ${prevText} ${parentOwn}`;
+  }
+
+  // The displayed current price: first currency amount in scope that is not struck through
+  // and has no member / was / original label nearby.
   function fromText(scope) {
     const hits = [];
     for (const el of scope.querySelectorAll("*")) {
@@ -92,7 +110,8 @@
       }
       const letters = candidate.replace(/[\d\s.,$€£¥₹\-–]+/g, "").replace(/USD|EUR|GBP|CAD|kr/g, "");
       if (letters.length > MAX_LEFTOVER_LETTERS || !isVisible(el)) continue;
-      hits.push({ el, text: candidate, old: candidate === text && isOldPrice(el) });
+      const notCurrent = (candidate === text && isOldPrice(el)) || NOT_CURRENT_RE.test(nearbyText(el, candidate));
+      hits.push({ el, text: candidate, old: notCurrent });
     }
     const current = hits.find((h) => !h.old);
     if (!current) return null;
@@ -110,5 +129,16 @@
     }
   }
 
-  global.SecondLookDomPrice = { readDomPrice };
+  // Only the visible text price in the main product container (no itemprop or data-price).
+  // Used to double-check prices from JSON-LD and meta tags.
+  function readDisplayedPrice(name) {
+    try {
+      return fromText(productContainer(name));
+    } catch (err) {
+      console.warn("[SecondLook] displayed price read failed", err);
+      return null;
+    }
+  }
+
+  global.SecondLookDomPrice = { readDomPrice, readDisplayedPrice };
 })(globalThis);
