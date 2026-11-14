@@ -171,6 +171,41 @@ async function checkActiveTab() {
   return { started: true };
 }
 
+// Is the active tab a product page? Local signals only (no backend, no Gemini), so the popup opens fast:
+// Product JSON-LD, og:type "product", a product price meta tag, or an Add to cart button (stores like Zara
+// have no JSON-LD). Any other page (Google, news, chrome://) gets the savings summary instead of "Check this item".
+async function pageKind() {
+  let tab;
+  try {
+    tab = await activeTab();
+  } catch {
+    return { product: false, reason: "not a web page" };
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["src/content/reader/price.js", "src/content/reader/jsonld.js", "src/content/matchers.js"],
+    });
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const meta = (sel) => document.querySelector(sel)?.getAttribute("content")?.trim() || "";
+        const jsonld = Boolean(globalThis.SecondLookJsonLd?.readJsonLd()?.name);
+        const ogProduct = /product/i.test(meta('meta[property="og:type"]'));
+        const priceMeta = Boolean(meta('meta[property="product:price:amount"]') || meta('meta[property="og:price:amount"]')
+          || document.querySelector('[itemprop="price"]'));
+        const m = globalThis.SecondLookMatchers;
+        const addToCart = Boolean(m && m.candidates(m.isAddToCart).length);
+        return { product: jsonld || ogProduct || priceMeta || addToCart, signals: { jsonld, ogProduct, priceMeta, addToCart } };
+      },
+    });
+    return injection?.result ?? { product: false, reason: "no result" };
+  } catch (err) {
+    // Pages the extension cannot script (Chrome Web Store, PDF viewer) are not stores.
+    return { product: false, reason: String(err?.message || err).slice(0, 120) };
+  }
+}
+
 async function diagnose() {
   const tab = await activeTab();
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [...READER_FILES, "src/content/diagnose.js"] });
@@ -190,6 +225,8 @@ const handlers = {
     return { loggedIn: Boolean(token), email, profileType, phone };
   },
   CHECK_ACTIVE_TAB: checkActiveTab,
+  PAGE_KIND: pageKind,
+  IMPACT: () => api("/impact"),
   DIAGNOSE: diagnose,
   ANALYZE_ITEM: analyzeItem,
   READ_PAGE: ({ url, text, image_url }) => api("/read-page", { method: "POST", body: { url, text, image_url } }),

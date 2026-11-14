@@ -1,0 +1,21 @@
+{
+  "_note": "Lifecycle carbon footprint per garment, kg CO2e, cradle to grave. A category gets a number only with a cited source (CONTRACT rule: no number without a source). Categories not listed are counted as skipped but add nothing to the CO2e estimate. Every figure is an industry average, so the UI labels the total as an estimate.",
+  "unit": "kg CO2e",
+  "per_category": {
+    "jeans": {
+      "kg_co2e": 33.4,
+      "source": "Levi's 501 lifecycle assessment (2015), as cited by the UN Convention to Combat Desertification",
+      "url": "https://www.unccd.int/resources/unccd-library/can-fashion-ever-be-sustainable"
+    },
+    "tee": {
+      "kg_co2e": 10.6,
+      "source": "Carbonfact, Carbon footprint of a t-shirt (median)",
+      "url": "https://www.carbonfact.com/carbon-footprint/t-shirt"
+    },
+    "dress": {
+      "kg_co2e": 14.24,
+      "source": "Carbonfact, Carbon footprint of a dress (median)",
+      "url": "https://www.carbonfact.com/carbon-footprint/dress"
+    }
+  }
+}

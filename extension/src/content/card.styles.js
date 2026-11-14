@@ -6,8 +6,8 @@
     :host { all: initial; }
 
     .sl {
-      --bg: #ffffff; --ink: #1d1b18; --muted: #6b665e; --line: #e2ddd3; --soft: #f4f1ea;
-      --accent: #2f6b4f; --accent-ink: #ffffff; --danger: #a33a2b; --danger-soft: #fbeeeb;
+      --bg: #ffffff; --ink: #1e1a24; --muted: #6a6275; --line: #e3dcec; --soft: #f3f0f8;
+      --accent: #4b2a7b; --accent-ink: #ffffff; --danger: #a33a2b; --danger-soft: #fbeeeb;
       --have: #3b5ba5; --trend: #a8620a; --good: #2f7d4f;
       --img-outline: oklch(0 0 0 / 0.1);
       --shadow:
@@ -21,8 +21,8 @@
     }
     @media (prefers-color-scheme: dark) {
       .sl {
-        --bg: #1f1e1b; --ink: #f1ede6; --muted: #a39d93; --line: #3a3732; --soft: #2a2825;
-        --accent: #5fae86; --accent-ink: #10221a; --danger: #e07a6a; --danger-soft: #3a2420;
+        --bg: #1e1a26; --ink: #f2eef7; --muted: #a69db2; --line: #3a3244; --soft: #28222f;
+        --accent: #b79cf0; --accent-ink: #1e1230; --danger: #e07a6a; --danger-soft: #3a2420;
         --have: #8aa6e8; --trend: #e6a454; --good: #6cc495;
         --img-outline: oklch(1 0 0 / 0.1);
         --shadow:
@@ -55,7 +55,7 @@
 
     .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
     .brand { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: 0.04em; }
-    .brand svg { width: 16px; height: 16px; color: var(--accent); }
+    .brand svg { width: 18px; height: 18px; color: var(--accent); }
 
     .icon-btn {
       all: unset; box-sizing: border-box; cursor: pointer; width: 28px; height: 28px;
@@ -198,7 +198,8 @@
     }
     .source:focus-visible, button.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .row { display: flex; gap: 8px; align-items: center; }
-    .row .primary, .row .secondary { flex: 1; }
+    .row .primary, .row .secondary { flex: 1; white-space: nowrap; }
+    .row .secondary { flex-grow: 1.3; } /* "Skip it anyway" is the longest label; give it room on one line */
     .status { margin-top: 10px; font-size: 12px; color: var(--muted); }
     .status:empty { display: none; }
     .status.error { color: var(--danger); }

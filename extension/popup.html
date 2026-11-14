@@ -8,7 +8,8 @@
 <body>
   <header>
     <span class="brand">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/></svg>
+      <!-- Logo: a "2" drawn as a hanger. The hook is the top of the 2, the diagonal and base are the hanger, the light stroke is its other shoulder. -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.6 11.2 20.2 18.6" stroke-width="2" opacity="0.45"/><path d="M8.4 7.1C8.4 4.9 10 3.4 12.1 3.4c2.1 0 3.6 1.5 3.6 3.4 0 1.7-1.1 2.8-3.1 4.4l-8.8 7.4h16.4" stroke-width="2.4"/></svg>
       Second Look
     </span>
     <button id="logout" class="ghost small" hidden>Log out</button>
@@ -34,8 +35,32 @@
 
   <main id="main-view" hidden>
     <p id="who" class="muted small"></p>
-    <button id="check" class="primary">Check this item</button>
+
+    <!-- Product pages: check the item. Other pages: the savings summary. popup.js picks one with PAGE_KIND. -->
+    <div id="product-tools" class="stack" hidden>
+      <button id="check" class="primary">Check this item</button>
+    </div>
     <p id="status" class="status" role="status"></p>
+
+    <section id="summary" class="summary" aria-labelledby="summary-title" hidden>
+      <h2 id="summary-title">Your savings so far</h2>
+      <div class="stats">
+        <div class="stat">
+          <span class="stat-value" id="money-kept">$0</span>
+          <span class="stat-label">kept by skipping</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="co2e">0 kg</span>
+          <span class="stat-label"><span>CO<sub>2</sub>e avoided</span> <span class="tag">Estimate</span></span>
+        </div>
+      </div>
+      <p id="summary-detail" class="small muted"></p>
+      <details id="summary-sources" class="sources" hidden>
+        <summary class="small">How CO<sub>2</sub>e is estimated</summary>
+        <ul id="sources-list" class="small"></ul>
+      </details>
+      <p class="switch small muted">On a store page? <button type="button" id="check-anyway" class="link">Check this page anyway</button></p>
+    </section>
 
     <section aria-labelledby="session-title">
       <div class="section-head">
@@ -46,7 +71,7 @@
       <ul id="session-list"></ul>
     </section>
 
-    <section aria-labelledby="diag-title">
+    <section id="diag-section" aria-labelledby="diag-title" hidden>
       <div class="section-head">
         <h2 id="diag-title">Store testing</h2>
       </div>

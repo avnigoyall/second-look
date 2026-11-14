@@ -392,6 +392,22 @@ class DashboardResponse(BaseModel):
     cost_per_wear: float | None = None
 
 
+class ImpactSource(BaseModel):
+    category: str
+    kg_co2e: float
+    source: str
+    url: str
+
+
+class ImpactResponse(BaseModel):
+    """GET /impact. Totals over verdicts the shopper skipped. CO2e is an estimate from config/impact.json."""
+    money_kept: float
+    items_skipped: int
+    co2e_kg: float = Field(description="Lifecycle kg CO2e of skipped items in categories with a sourced figure")
+    co2e_items_counted: int = Field(description="How many skipped items had a sourced figure")
+    co2e_sources: list[ImpactSource] = []
+
+
 class TrendsResponse(BaseModel):
     trends: list[TrendSummary]
 

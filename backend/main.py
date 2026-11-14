@@ -15,6 +15,7 @@ from backend.alternatives import stored_verdict_alternative
 from backend.auth import check_password, create_token, current_user, hash_password
 from backend.db import client, closet_items, ensure_indexes, users, verdicts
 from backend.images import decode_base64_image, to_data_url
+from backend.impact import impact_summary
 from backend.page_reader import ReadPageError, read_page
 from backend.phone import PhoneError, normalize_phone
 from backend.routers import attributes as attributes_router
@@ -232,8 +233,16 @@ def dashboard(user=Depends(current_user)):
     result = list(verdicts.aggregate(pipeline))
     money_kept = round(result[0]["total"], 2) if result else 0.0
     recent = verdicts.find({"user_id": user["_id"]}).sort("created_at", -1).limit(50)
-    return {"money_kept": money_kept, "waste_avoided": None,
+    co2e = impact_summary(user["_id"])
+    waste_avoided = co2e["co2e_kg"] if co2e["co2e_items_counted"] else None  # kg CO2e, estimate (GET /impact)
+    return {"money_kept": money_kept, "waste_avoided": waste_avoided,
             "verdicts": [verdict_out(d) for d in recent], "cost_per_wear": None}
+
+
+@app.get("/impact", response_model=m.ImpactResponse)
+def impact(user=Depends(current_user)):
+    """Popup summary on non-product pages: money kept and estimated CO2e avoided by skipped items."""
+    return impact_summary(user["_id"])
 
 
 @app.get("/cart-summary", response_model=m.CartSummaryResponse)
