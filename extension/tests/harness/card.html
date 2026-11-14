@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- Renders the real verdict card with sample data, no extension or backend needed.
+     Serve the extension folder (python3 -m http.server -d extension 8770) and open
+     /tests/harness/card.html?case=product or ?case=search. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Card harness</title>
+  <style>body { margin: 0; min-height: 100vh; font-family: system-ui; background: #e9e6df; }
+         @media (prefers-color-scheme: dark) { body { background: #121110; } }</style>
+</head>
+<body>
+  <script src="../../src/content/shadowHost.js"></script>
+  <script src="../../src/content/reader/price.js"></script>
+  <script src="../../src/content/card.styles.js"></script>
+  <script src="../../src/content/card.js"></script>
+  <script>
+    const item = { name: "Wide Leg Barrel Jeans", price: 49.9, store: "Example Store", image_url: null };
+    const cases = {
+      product: [
+        { name: "501 Original Men's Jeans", url: "https://www.levi.com/US/en_US/clothing/men/jeans/straight/501-original-mens-jeans/p/005010193", price: 79.5, store: "Levi's", link_kind: "product", reason: "A straight leg has stayed in rotation for decades." },
+        { name: "Men's Wrinkle-Free Double L Chino Shorts, Classic Fit, 8\"", url: "https://www.llbean.com/llb/shop/68810", price: 54.95, store: "L.L.Bean", link_kind: "product", reason: "A classic summer cut." },
+      ],
+      search: [
+        { name: "Classic straight-leg jeans", url: "https://www.gap.com/browse/search.do?searchText=classic+straight-leg+jeans", price: null, store: "Gap", link_kind: "search", reason: "A classic version outlasts the trend." },
+      ],
+      mixed: [
+        { name: "Italian Leather Ankle Strap Flat Sandal in Black", url: "https://www.quince.com/women/italian-leather-ankle-strap-flat-sandal?color=black", price: 80, store: "Quince", link_kind: "product" },
+        { name: "Plain white crew-neck tee", url: "https://www.gap.com/browse/search.do?searchText=plain+white+crew-neck+tee", store: "Gap", link_kind: "search" },
+      ],
+    };
+    const which = new URLSearchParams(location.search).get("case") || "product";
+    SecondLookCard.showVerdict(item, {
+      verdict: "micro_trend",
+      reason: "This look is peaking now and will likely fade within a few months.",
+      alternatives: cases[which],
+    }, { onAction: async () => {}, onFeedback: async () => {} });
+  </script>
+</body>
+</html>

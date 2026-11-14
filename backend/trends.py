@@ -62,12 +62,47 @@ class TrendFeatures(BaseModel):
     fabric: str | None = None
 
 
+LinkKind = Literal["product", "search"]
+
+
 class TrendAlternative(BaseModel):
-    """A longer-lasting piece to suggest instead. url only when a source gave it."""
+    """A longer-lasting piece to suggest instead.
+
+    url: an article link, only when one of the trend's sources gave it (checked in TrendDoc).
+    product_url: where to buy. Either a product page found by Claude web search at seed or agent time
+    (only URLs that came back in search results, then checked over HTTP, link_kind "product"), or a
+    store search page built from type (link_kind "search"). All link fields are optional so trends
+    stored before links existed still validate; backend/alternatives.py fills a search link on read.
+    """
     type: str = Field(min_length=1, description="Type of piece, for example 'straight-leg dark wash jeans'")
     why_it_lasts: str = Field(min_length=1)
     where_to_look: str = Field(min_length=1, description="Kind of store or section, not a product link")
     url: str | None = None
+    product_name: str | None = None
+    product_url: str | None = None
+    price: float | None = Field(None, ge=0, description="Dollars, from the product page or a cited search result")
+    store: str | None = None
+    verified_at: datetime | None = Field(None, description="Last time the product page loaded as a real product "
+                                                           "page. Null when the store blocks the check or for search links")
+    link_kind: LinkKind | None = Field(None, description="product or search. Set whenever product_url is set")
+
+    @field_validator("product_url")
+    @classmethod
+    def http_product_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not re.match(r"^https?://\S+$", v):
+            raise ValueError(f"product_url must start with http:// or https://, got '{v}'")
+        return v
+
+    @model_validator(mode="after")
+    def link_kind_matches(self):
+        if self.product_url and self.link_kind is None:
+            self.link_kind = "product"
+        if not self.product_url:
+            self.link_kind = None
+        return self
 
 
 class TrendDoc(BaseModel):

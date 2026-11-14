@@ -6,12 +6,17 @@ Run from the project root:
     python scripts/run_trend_agent.py --dry-run            # show what would be added, write nothing
     python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-....json   # reuse a saved search
 
-Two calls:
+    python scripts/run_trend_agent.py --no-links           # skip the product link search
+
+Two calls, then a link step:
   (a) search: Claude (CLAUDE_MODEL) with the server-side web search tool (at most 5 searches). Keeps
       the report text, the sources Claude cited (url and title), and which sentences cite which
       source. Saved to .trend_runs/.
   (b) structuring: Gemini, no tools. Turns the text from (a) into trend documents. It can cite only the
       numbered sources from (a), by id. The code maps ids back to URLs, so no URL can be invented.
+  (c) links: for each kept trend, one Claude web search call finds 1 or 2 basic product pages for its
+      alternatives (backend/alternative_finder.py). Only URLs from search results, checked over HTTP.
+      Alternatives with no product link get a store search link. Audit saved to .trend_runs/.
 
 Guards in code (not left to the model):
 - a trend needs a category from attributes.json and at least one source from (a)
@@ -471,6 +476,30 @@ def apply_guards(structured: list[StructuredTrend], run: dict, existing: list[di
     return kept, notes
 
 
+# ---------- step (c): alternative links ----------
+
+def add_links(docs: list[TrendDoc], find: bool) -> list[TrendDoc]:
+    """Every alternative gets a link: a checked product page from web search, else a store search."""
+    from backend.alternative_finder import find_links, save_audit
+    from backend.alternatives import with_search_fallback
+
+    if find and any(d.alternatives for d in docs):
+        log(f"\n(c) Product links with {os.getenv('CLAUDE_MODEL')} web search")
+    out, audits = [], []
+    for doc in docs:
+        data = doc.model_dump()
+        if find and data["alternatives"]:
+            log(f"    '{doc.name}':")
+            data, audit = find_links(data, log=log)
+            audits.append(audit)
+        else:
+            data["alternatives"] = [with_search_fallback(a, data.get("category")) for a in data["alternatives"]]
+        out.append(TrendDoc.model_validate(data))
+    if audits:
+        log(f"    link audit saved to {save_audit(audits, RUNS_DIR).relative_to(ROOT)}")
+    return out
+
+
 # ---------- main ----------
 
 def print_trend(doc: TrendDoc):
@@ -482,6 +511,9 @@ def print_trend(doc: TrendDoc):
         log(f"    source: {s.title} - {s.url}")
     for a in doc.alternatives:
         log(f"    instead: {a.type} ({a.where_to_look}){' - ' + a.url if a.url else ''}")
+        if a.product_url:
+            label = "buy" if a.link_kind == "product" else "search"
+            log(f"      {label}: {a.product_name or a.store or ''} {a.product_url}")
 
 
 def main():
@@ -494,6 +526,8 @@ def main():
                         help="Gemini model for the structuring call (env TREND_AGENT_MODEL, default "
                              "gemini-3.5-flash). The search call uses CLAUDE_MODEL")
     parser.add_argument("--dry-run", action="store_true", help="print the trends, write nothing to the database")
+    parser.add_argument("--no-links", action="store_true",
+                        help="skip the product link search; alternatives get store search links")
     parser.add_argument("--from-grounded", type=Path,
                         help="reuse a saved call (a) result from .trend_runs/ instead of searching again")
     args = parser.parse_args()
@@ -544,6 +578,8 @@ def main():
     kept, notes = apply_guards(structured, run, existing, max_new)
     for n in notes:
         log(f"    guard: {n}")
+
+    kept = add_links(kept, find=not args.no_links)
 
     added = []
     for doc in kept:

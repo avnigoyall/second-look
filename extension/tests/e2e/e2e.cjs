@@ -113,6 +113,14 @@ const RECORDER = `(() => {
     const name = await card(page).locator(".item-name").textContent();
     const meta = await card(page).locator(".item-meta").textContent();
     (name === "Ribbed Cropped Cardigan" && meta.includes("34.90") ? pass : fail)("2a. tier 2 meta read (store suffix stripped, EU price)", `${name} | ${meta}`);
+    // The stub cycles verdicts per user, so this second check is micro_trend: alternatives show, each one a link.
+    const badge = await card(page).locator(".badge").textContent();
+    const alts = await card(page).locator("a.alt-link").evaluateAll((as) => as.map((a) => ({
+      href: a.getAttribute("href"), target: a.target, rel: a.rel, kind: a.dataset.linkKind, text: a.innerText.trim() })));
+    (badge === "Micro trend" && alts.length >= 1 && alts.length <= 2 ? pass : fail)("2a. micro_trend card shows 1 or 2 alternatives", `${badge} | ${alts.length}`);
+    const linkOk = (a) => /^https?:\/\//.test(a.href) && a.target === "_blank" && /noopener/.test(a.rel) && /noreferrer/.test(a.rel) && a.text.length > 0;
+    (alts.length && alts.every(linkOk) ? pass : fail)("2a. every alternative is an http(s) link with target _blank and rel noopener noreferrer", JSON.stringify(alts));
+    (alts.every((a) => a.kind !== "search" || /^Search \S/.test(a.text)) ? pass : fail)("2a. search fallback links read 'Search <store> for <type>'", alts.map((a) => `${a.kind}: ${a.text.replace(/\n/g, " | ")}`).join(" ; "));
     await page.screenshot({ path: `${OUT}/2a-meta-verdict.png` });
   }
 
@@ -386,6 +394,15 @@ const RECORDER = `(() => {
     const logs = page.slLogs.join(" | ");
     (/removal cancelled in dialog: Relaxed Linen Shirt/.test(logs) && /confirmed in dialog/.test(logs) ? pass : fail)("8. cancel and confirm are logged");
     await sleep(300); await page.screenshot({ path: `${OUT}/8b-confirm-removed.png` });
+  }
+
+  // ---- 9. API: every stored alternative comes back with a url (read-only) ----
+  {
+    const login = await fetch(`${API}/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password: "secret123" }) }).then((r) => r.json());
+    const dash = await fetch(`${API}/dashboard`, { headers: { Authorization: `Bearer ${login.token}` } }).then((r) => r.json());
+    const alts = (dash.verdicts || []).flatMap((v) => v.alternatives || []);
+    (alts.length > 0 && alts.every((a) => typeof a.url === "string" && /^https?:\/\//.test(a.url) && ["product", "search"].includes(a.link_kind)) ? pass : fail)(
+      "9. /dashboard: every alternative has a url and link_kind", `${alts.length} alternatives`);
   }
 
   // ---- console errors ----

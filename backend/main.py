@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from backend import models as m
+from backend.alternatives import alternatives_for_trend, stored_verdict_alternative
 from backend.auth import check_password, create_token, current_user, hash_password
 from backend.db import client, closet_items, ensure_indexes, trends, users, verdicts
 from backend.images import decode_base64_image, to_data_url
@@ -69,7 +70,8 @@ def trend_out(doc) -> m.Trend:
 def verdict_out(doc) -> m.Verdict:
     ids = {k: str(doc[k]) if doc.get(k) else None for k in ("matched_closet_item_id", "matched_trend_id")}
     return m.Verdict(id=str(doc["_id"]), item=doc["item"], attributes=doc.get("attributes"),
-                     verdict=doc["verdict"], reason=doc["reason"], alternatives=doc.get("alternatives", []),
+                     verdict=doc["verdict"], reason=doc["reason"],
+                     alternatives=[stored_verdict_alternative(a) for a in doc.get("alternatives") or []],
                      expected_wears=doc.get("expected_wears"), action=doc["action"],
                      feedback=doc["feedback"], created_at=doc["created_at"], **ids)
 
@@ -144,8 +146,9 @@ def analyze(body: m.AnalyzeRequest, user=Depends(current_user)):
     elif verdict == "micro_trend":
         matched_trend = trends.find_one({}, sort=[("_id", 1)])
         reason = "This look is peaking now and will likely fade within a few months. (Stub reason.)"
-        alternatives = [m.Alternative(name="Classic straight-leg version", price=48.0,
-                                      reason="Same feel, lasts longer. (Stub alternative.)")]
+        # Every alternative carries a link: the trend's product links, else a store search link.
+        alternatives = [m.Alternative(**a) for a in alternatives_for_trend(
+            matched_trend or {}, fallback_query="classic straight-leg jeans")]
     else:
         reason = "This fills a real gap in your closet and pairs with what you own. (Stub reason.)"
         expected_wears = 30
