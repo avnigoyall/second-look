@@ -6,3 +6,4 @@ node_modules/
 .DS_Store
 .playwright-mcp/
 extension/tests/e2e/shots/
+.trend_runs/

@@ -1,6 +1,7 @@
 """Seed the database. Safe to run any number of times.
 
 Run from the project root:  python seed/seed.py
+Trends are loaded separately:  python scripts/seed_trends.py
 """
 import sys
 from datetime import datetime, timezone
@@ -9,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.auth import hash_password  # noqa: E402
-from backend.db import closet_items, ensure_indexes, trends, users  # noqa: E402
+from backend.db import closet_items, ensure_indexes, users  # noqa: E402
 from backend.images import to_data_url  # noqa: E402
 
 PHOTOS = Path(__file__).resolve().parent / "photos"
@@ -19,16 +20,6 @@ SEED_USERS = [
     ("demo@secondlook.test", "demo1234", "demo"),
     ("new@secondlook.test", "new1234", "new"),
 ]
-
-PLACEHOLDER_TRENDS = [
-    {"name": "PLACEHOLDER trend 1: oversized barrel jeans",
-     "features": {"cut": "wide", "color": "blue", "fabric": "denim"}, "lifespan_weeks_est": 16},
-    {"name": "PLACEHOLDER trend 2: cropped boxy cardigan",
-     "features": {"cut": "cropped", "color": "beige", "fabric": "wool"}, "lifespan_weeks_est": 12},
-    {"name": "PLACEHOLDER trend 3: metallic silver trainers",
-     "features": {"cut": "regular", "color": "gray", "fabric": "leather"}, "lifespan_weeks_est": 10},
-]
-
 
 def now():
     return datetime.now(timezone.utc)
@@ -84,28 +75,7 @@ def seed_closet(demo_user_id):
     print(f"closet: {added} added, {len(files) - added} already present")
 
 
-def seed_trends():
-    added = 0
-    for t in PLACEHOLDER_TRENDS:
-        result = trends.update_one(
-            {"name": t["name"]},
-            {"$setOnInsert": {
-                **t,
-                "first_seen": now(),
-                "lifespan_label": "placeholder",
-                "sources": [],
-                "example_images": [],
-                "alternatives": [],
-                "origin": "seed",
-            }},
-            upsert=True,
-        )
-        added += 1 if result.upserted_id else 0
-    print(f"trends: {added} added, {len(PLACEHOLDER_TRENDS) - added} already present")
-
-
 if __name__ == "__main__":
     ensure_indexes()
     ids = seed_users()
     seed_closet(ids["demo"])
-    seed_trends()

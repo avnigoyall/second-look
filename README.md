@@ -6,8 +6,9 @@ Built so far:
 
 - **Part 0: Foundation.** API, database, auth, extension messaging, and dashboard. Verdicts are still stubs with canned data.
 - **Part 1: Capture.** The extension reads the product a shopper adds to their cart, shows the verdict card on the page, tracks the items checked in this session, and notices when one is removed from the cart.
+- **Part 4: Trends.** Curated seed trends plus a Gemini agent that adds sourced trends. `GET /trends` and `get_trends_for_prompt()` expose them for the verdict prompt.
 
-Not built yet: real verdict logic, closet matching, Nessie, trend logic, and the cart summary UI.
+Not built yet: real verdict logic, closet matching, trend matching, Nessie, and the cart summary UI.
 
 ## Layout
 
@@ -18,7 +19,8 @@ Not built yet: real verdict logic, closet matching, Nessie, trend logic, and the
 | `dashboard/` | One static page, served by the backend at `/dashboard-ui` |
 | `docs/` | `store-test-results.md`, the table for testing real stores by hand |
 | `seed/` | `seed.py` plus a `photos/` folder for the demo user's closet |
-| `scripts/` | `check_keys.py` checks each external service key |
+| `scripts/` | `check_keys.py` checks each external service key. `seed_trends.py` and `run_trend_agent.py` fill the trends collection |
+| `tests/` | Offline Python tests: `python -m unittest discover tests` |
 
 ## Setup
 
@@ -42,6 +44,7 @@ cp .env.example .env        # then fill in the values
 | `NESSIE_API_KEY` | Capital One Nessie (later parts) |
 | `CLAUDE_MODEL` | Model id for the Claude key check. Use a small, cheap model, for example `claude-haiku-5-5` |
 | `GEMINI_MODEL` | Model id for `/read-page` and the Gemini key checks. Use a fast model, for example `gemini-3.5-flash-lite` (see Assumptions) |
+| `TREND_AGENT_MODEL` | Optional. Model id for `run_trend_agent.py`. Default `gemini-3.5-flash` |
 
 ## Run
 
@@ -49,6 +52,7 @@ All commands run from the project root with the virtual environment active.
 
 ```bash
 python seed/seed.py                          # safe to run again
+python scripts/seed_trends.py                # curated trends from seed/trends_seed.json, safe to run again
 uvicorn backend.main:app --reload --port 8000
 python scripts/check_keys.py                 # one PASS or FAIL line per service
 ```
@@ -115,10 +119,33 @@ Every read logs `[SecondLook] price source: jsonld | meta | dom | gemini | none`
 
 **Session list.** `extension/src/shared/sessionStore.js` keeps up to 50 entries under `chrome.storage.local` key `secondLookSession`: `{id, name, price, image_url, store, url, verdict_id, verdict, status, ts}`. Status is checked, skipped, bought, or removed.
 
+## Trends (Part 4)
+
+Two layers fill the `trends` collection. Both run offline from the project root.
+
+**1. Seed trends.** Put the curated trends in `seed/trends_seed.json` (the `_template` key in that file lists every field), then run `python scripts/seed_trends.py`. Entries with `"_placeholder": true` are skipped. The script checks every entry first and writes nothing if one is invalid. It upserts by name (case-insensitive) and sets `origin: "seed"`.
+
+**2. Trend agent.** `python scripts/run_trend_agent.py` adds up to 5 new trends with `origin: "agent"`.
+
+```bash
+python scripts/run_trend_agent.py                         # default Gen Z and college queries
+python scripts/run_trend_agent.py -q "..." -q "..."       # your own focus queries
+python scripts/run_trend_agent.py --dry-run               # print what would be added, write nothing
+python scripts/run_trend_agent.py --from-grounded .trend_runs/grounded-<time>.json   # reuse a saved search
+```
+
+- **Call (a), grounded:** Gemini with the Google Search tool writes a research report. The script keeps the text, each grounding chunk's title and URL, which sentences each chunk supports, and the `searchEntryPoint` HTML, and saves them to `.trend_runs/` (git-ignored).
+- **Call (b), structuring:** Gemini with no tools turns the report into trend documents. The report is marked with source ids (`[S3]`) and the model cites ids only. The code maps ids back to URLs, so a URL cannot be invented.
+- **Guards in code:** a trend with no source from call (a) is discarded. Names are deduped case-insensitively against existing trends and within the run (a unique case-insensitive index backs this up). A lifespan number without a cited source is dropped to null. An alternative's link is kept only if it is one of the call (a) sources. At most 5 new trends per run.
+- If call (a) returns no grounding chunks, the script prints a warning, adds nothing, and exits with code 2.
+
+**Reading trends.** `GET /trends` (JWT) returns every trend without `example_images`; each trend has `example_image_count` instead. `backend.trends.get_trends_for_prompt()` returns a compact list for the verdict prompt: `name`, `category`, `features`, `lifespan_label`, and `source_titles`.
+
 ## Tests
 
 ```bash
 node extension/tests/price.test.js       # price parser unit tests
+python -m unittest discover tests        # trend guards and seed rules, offline
 ```
 
 ### Extension E2E test
@@ -172,3 +199,18 @@ Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension
 - **`[data-price]`** is used as-is only when it reads like a price ("49.95" or "$49.95"). A whole number like "4995" might be cents, so the element's visible text is used instead.
 - **Currency text** must be short (40 characters or less) and mostly price: after removing the numbers and currency, at most 15 letters may remain. "Sale price $39.90" passes, "Free shipping over $50" does not.
 - **"save"** is excluded only as a whole word, so a class like `saved-items` is not affected but a button labelled "Save to wishlist" is.
+
+### Part 4 assumptions
+
+- **Grounding quota:** on the current `GEMINI_API_KEY`, every Google Search grounded call returns `429 RESOURCE_EXHAUSTED` (on `gemini-3.5-flash` and `gemini-3.5-flash-lite`), while plain calls work. The agent stops with a message that says so. Grounding needs billing enabled on the key's project, or another key.
+- **Agent model:** `gemini-3.5-flash` by default, not the `GEMINI_MODEL` used by `/read-page`. The agent runs offline, so quality matters more than speed. Override with `--model` or `TREND_AGENT_MODEL`.
+- **Lifespan rule:** a trend stores `lifespan_source_url` next to `lifespan_weeks_est`. A number is allowed only when that URL is one of the trend's sources. The seed script rejects a number without it. The agent drops an uncited number to null and keeps the label.
+- **Source URLs:** grounding chunk URLs are Google redirect links that expire. The agent stores the page each one points to (read from the redirect's `Location` header). If that lookup fails, it stores the redirect link.
+- **Source titles** for agent trends are the titles Google returns for each chunk. These are often a site name such as `vogue.com`, not the article headline.
+- **Features and category:** the agent uses only values from `backend/config/attributes.json` (color uses `color_family`), so Part 5 can match them to item attributes. Seed trends may use other words; the seed script prints a note for each one but loads it.
+- **first_seen:** for seed trends, the date in the file, or the date first loaded if the file has none. For agent trends, the date of the run that found the trend.
+- **search_suggestions_html:** one `searchEntryPoint` HTML per agent run, stored on every trend from that run. Google requires showing it wherever grounded results are displayed. Seed trends never have it.
+- **Example images:** the agent adds none, because grounding returns no image URLs.
+- **Seed overrides agent:** if a seed trend has the same name as an agent trend, the seed run replaces it, sets `origin: "seed"`, and removes `search_suggestions_html`.
+- **Part 0 placeholder trends:** `seed/seed.py` no longer creates the three `PLACEHOLDER trend` documents. `seed_trends.py` deletes them if they exist, so they never reach the verdict prompt.
+- **Trend model:** `sources` is now `[{title, url}]`, `alternatives` is `[{type, why_it_lasts, where_to_look, url}]`, and `lifespan_weeks_est` is a number that may have decimals. The `/analyze` stub's `matched_trend` uses this shape.
