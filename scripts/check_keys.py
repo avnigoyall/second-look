@@ -12,6 +12,8 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 NESSIE_URL = "https://v2-prod-api.nessieisreal.com"
 TIMEOUT_S = 30  # per call, so one stuck service cannot hang the whole check
+# Keep in sync with WEB_SEARCH_TOOL in scripts/run_trend_agent.py, so this checks the tool the agent uses.
+WEB_SEARCH_TOOL = {"type": "web_search_20260318", "name": "web_search", "allowed_callers": ["direct"]}
 
 
 def report(name: str, ok: bool, detail: str = ""):
@@ -58,31 +60,46 @@ def check_claude():
 def check_gemini():
     key, model = os.getenv("GEMINI_API_KEY"), os.getenv("GEMINI_MODEL", "")
     if not key or not model:
-        missing = "GEMINI_API_KEY" if not key else "GEMINI_MODEL"
-        report("Gemini (a) generate", False, f"{missing} is not set")
-        report("Gemini (b) search grounding", False, f"{missing} is not set")
-        return
+        return report("Gemini generate", False, f"{'GEMINI_API_KEY' if not key else 'GEMINI_MODEL'} is not set")
     from google import genai
     from google.genai import types
     client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=TIMEOUT_S * 1000))
-
     try:
         client.models.generate_content(model=model, contents="Reply with OK.")
-        report("Gemini (a) generate", True, model)
+        report("Gemini generate", True, model)
     except Exception as e:
-        report("Gemini (a) generate", False, short_error(e))
+        report("Gemini generate", False, short_error(e))
 
+
+def check_claude_web_search():
+    """One real search with the same tool the trend agent uses (scripts/run_trend_agent.py WEB_SEARCH_TOOL).
+
+    Costs one search ($10 per 1,000) plus a few tokens. Server-tool errors arrive as HTTP 200 with an
+    error object instead of a result list, so the result block is checked, not only the HTTP status.
+    """
+    key, model = os.getenv("ANTHROPIC_API_KEY"), os.getenv("CLAUDE_MODEL", "")
+    if not key or not model:
+        return report("Claude web search", False,
+                      f"{'ANTHROPIC_API_KEY' if not key else 'CLAUDE_MODEL'} is not set")
     try:
-        resp = client.models.generate_content(
-            model=model,
-            contents="What is today's date? One short sentence.",
-            config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())]),
-        )
-        grounded = bool(resp.candidates and resp.candidates[0].grounding_metadata)
-        report("Gemini (b) search grounding", True,
-               "grounding metadata returned" if grounded else "call ok, but no grounding metadata in reply")
+        import anthropic
+        client = anthropic.Anthropic(api_key=key, timeout=TIMEOUT_S * 2, max_retries=0)
+        resp = client.messages.create(
+            model=model, max_tokens=1024, tools=[{**WEB_SEARCH_TOOL, "max_uses": 1}],
+            messages=[{"role": "user", "content": "Search the web once for today's top news headline. "
+                                                  "Reply with the headline only."}])
+    except anthropic.BadRequestError as e:
+        hint = " (web search may be turned off for this org)" if "web" in str(e.message).lower() else ""
+        return report("Claude web search", False, short_error(e) + hint)
     except Exception as e:
-        report("Gemini (b) search grounding", False, short_error(e))
+        return report("Claude web search", False, short_error(e))
+    results = [b for b in resp.content if b.type == "web_search_tool_result"]
+    if not results:
+        return report("Claude web search", False, f"no search ran (stop_reason {resp.stop_reason})")
+    content = results[0].content
+    if not isinstance(content, list):
+        return report("Claude web search", False, f"search error: {getattr(content, 'error_code', content)}")
+    report("Claude web search", True, f"{model}, {len(content)} results")
 
 
 def check_nessie():
@@ -101,5 +118,6 @@ def check_nessie():
 if __name__ == "__main__":
     check_mongo()
     check_claude()
+    check_claude_web_search()
     check_gemini()
     check_nessie()

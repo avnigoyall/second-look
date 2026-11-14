@@ -21,7 +21,7 @@ Not built yet: real verdict logic, trend matching against items, Nessie, and the
 | `dashboard/` | One static page, served by the backend at `/dashboard-ui` |
 | `docs/` | `store-test-results.md`, the table for testing real stores by hand |
 | `seed/` | `seed.py` plus a `photos/` folder for the demo user's closet |
-| `scripts/` | `check_keys.py` checks each external service key. `eval_attributes.py` scores Part 2. `create_indexes.py` builds the Atlas indexes and `tune_matching.py` scores closet matching. `seed_trends.py` and `run_trend_agent.py` fill the trends collection |
+| `scripts/` | `check_keys.py` checks each external service key. `eval_attributes.py` scores Part 2. `create_indexes.py` builds the Atlas indexes, `tune_matching.py` scores closet matching and `reembed_closet.py` recomputes closet embeddings. `seed_trends.py` and `run_trend_agent.py` fill the trends collection |
 | `eval/` | `attributes_eval.csv`, labeled items for the Part 2 eval, and `match_pairs.csv` for matching |
 | `tests/` | Offline Python tests: `python -m unittest discover tests` |
 
