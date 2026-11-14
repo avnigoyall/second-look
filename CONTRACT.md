@@ -221,7 +221,7 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 60/60 with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
+- Last known results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 60/60 twice after the Photon merge, unittest 118/118, with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
 - Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@secondlook.test`, plus throwaway `e2e<timestamp>@example.com` users.
 - E2E has a SKIP result for checks that need data the shared DB does not have yet. A SKIP is not a pass.
 - Before any merge to main: all suites pass, then a smoke test of the chain `/attributes`, then embed, then `find_matches`, then trends lookup, then `/analyze`.
@@ -259,7 +259,8 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 7 | `/analyze` under 3 s typical | Measured 3 to 4 s typical | Noted, open item |
 | 5 | `thresholds.json` has 3 keys | Adds `gray_margin: 0.04`. New `config/wears.json` (unverified) | Contract |
 | 11 | E2E 2a and 9 assume the stub returns micro_trend | Checks run on real micro_trend cards, else SKIP; non-micro_trend cards must show no alternatives | Contract |
-| 14 | No iMessage channel | Avni's Photon additions (`/imessage/*`, `users.phone`, verdict `channel` and `ownership`, data URL images) described from her branch; not on main yet | Contract (pending merge) |
+| 14 | No iMessage channel | Avni's Photon additions (`/imessage/*`, `users.phone`, verdict `channel` and `ownership`, data URL images) merged | Contract |
+| 1 | Every Gemini call retries busy replies | `/read-page` did not retry 429 or 503, which made E2E step 5 flaky. Now retries after 2 s and 4 s | Code |
 
 ## 13. Open items
 
@@ -269,7 +270,7 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 - `duplicate_similarity` tuning with real re-photographed pairs.
 - Remove the 3 Part 0 placeholder trends and any `EXAMPLE` or `TEST` trends when the real seeds load, since they can trigger stub micro_trend verdicts.
 
-## 14. iMessage channel via Photon (Avni) `[BUILT on Avni's branch, not on main yet]`
+## 14. iMessage channel via Photon (Avni) `[BUILT]`
 
 Photon connects the system to iMessage: a shopper texts a product photo, Photon passes it to the backend, and the verdict comes back as a message. Section text from Avni, as given:
 
@@ -282,6 +283,9 @@ Backend additions (for CONTRACT.md)
 - `fetch_image()` also accepts `data:image/...` URLs.
 - `python-multipart` added to `backend/requirements.txt` (the closet router needs it; it was missing).
 
-Main agent notes (checked against main on Nov 14):
-- None of the above is on main yet. Mark this section `[BUILT]` when Avni's branch merges.
-- `python-multipart` is missing from `requirements.txt` on main too, so a fresh clone cannot serve the closet upload routes until it lands.
+Main agent notes (merged from `feat/photon-imessage-agent` on Nov 14):
+- Merged with no conflicts. Live check on a separate port with a temporary secret: wrong secret 401, unlinked phone 404, link normalizes phone formats, analyze returned a verdict and message in 3.1 s, own yes added the item.
+- The Node agent lives in `imessage/` (Photon SDK, polling). It needs `PHOTON_*` values and the same `IMESSAGE_AGENT_SECRET` as the backend. The backend answers 503 on `/imessage/*` until `IMESSAGE_AGENT_SECRET` is set in the repo-root `.env`.
+- Known issue: `/imessage/own` answers the latest unanswered iMessage verdict, including have_this_look verdicts that never asked (`ask_ownership: false`). A later "yes" can then add a duplicate closet item. Fix: store `ask_ownership` on the verdict doc and filter on it.
+- Known issue: `/imessage/link` trusts any email (documented hackathon trust model). Needs a confirmation code before real users.
+- Closet items added by "yes" have no description, so they share the quick-add matching gap (section 5).

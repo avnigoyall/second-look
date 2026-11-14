@@ -234,7 +234,7 @@ const RECORDER = `(() => {
     await store.bringToFront();
     const report = await sw.evaluate(() => diagnose());
     const ok = report && report.tier_used === 3 && report.add_to_cart_candidates.includes("ADD TO BASKET");
-    (ok ? pass : fail)("5. diagnose report", JSON.stringify({ tier: report?.tier_used, fields: report?.fields_found, add: report?.add_to_cart_candidates }));
+    (ok ? pass : fail)("5. diagnose report", JSON.stringify({ tier: report?.tier_used, fields: report?.fields_found, add: report?.add_to_cart_candidates, ...(ok ? {} : { gemini: report?.tiers?.gemini }) }));
 
     // Popup UI: the real popup is not a tab, so in this test the popup page would be the active tab.
     // Feed the popup the real report from the service worker, then press its buttons.

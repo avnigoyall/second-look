@@ -7,6 +7,8 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
+from backend.services.gemini_json import BUSY_CODES, RETRY_WAIT_S
+
 log = logging.getLogger("secondlook.read_page")
 
 MAX_TEXT_CHARS = 8000
@@ -14,6 +16,9 @@ MAX_TEXT_CHARS = 8000
 # so the retry only runs when the first attempt came back fast (worst case about 13 seconds).
 ATTEMPT_TIMEOUT_MS = 10000
 RETRY_IF_FIRST_UNDER_S = 3
+# A busy reply (429 rate limit or 503 high demand) is retried after 2 s, then 4 s. Kept below the shared
+# helper's 4 attempts because this call sits on the click path (the extension waits up to 15 s).
+BUSY_ATTEMPTS = 3
 
 PROMPT = """You read online store product pages.
 From the page text below, extract the ONE main product the page is selling.
@@ -52,6 +57,19 @@ def _get_client():
     return _client
 
 
+def _generate(model: str, prompt: str, config):
+    """One Gemini call, retried only while Gemini answers busy (429 or 503). Raises ReadPageError."""
+    for attempt in range(1, BUSY_ATTEMPTS + 1):
+        try:
+            return _get_client().models.generate_content(model=model, contents=prompt, config=config)
+        except Exception as e:
+            code = getattr(e, "code", None)
+            log.warning("read-page: Gemini call failed on attempt %s: %s", attempt, str(e)[:300])
+            if code not in BUSY_CODES or attempt == BUSY_ATTEMPTS:
+                raise ReadPageError(f"Gemini call failed ({code or type(e).__name__})") from e
+            time.sleep(RETRY_WAIT_S * 2 ** (attempt - 1))  # 2 s, then 4 s
+
+
 def read_page(url: str, text: str, image_url: str | None) -> PageItem:
     model = os.getenv("GEMINI_MODEL")
     if not model:
@@ -60,15 +78,11 @@ def read_page(url: str, text: str, image_url: str | None) -> PageItem:
     config = types.GenerateContentConfig(
         temperature=0, response_mime_type="application/json", response_schema=PageItem)
 
-    # Retry once, only when the reply is malformed. Network errors and timeouts are not retried.
+    # Retry once when the reply is malformed. Busy replies are retried inside _generate. Other network errors
+    # and timeouts are not retried.
     started = time.monotonic()
     for attempt in (1, 2):
-        try:
-            response = _get_client().models.generate_content(model=model, contents=prompt, config=config)
-        except Exception as e:
-            log.warning("read-page: Gemini call failed: %s", str(e)[:300])
-            code = getattr(e, "code", None)
-            raise ReadPageError(f"Gemini call failed ({code or type(e).__name__})") from e
+        response = _generate(model, prompt, config)
         try:
             item = response.parsed if isinstance(response.parsed, PageItem) else PageItem.model_validate_json(response.text or "")
         except (ValidationError, ValueError):
