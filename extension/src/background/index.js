@@ -106,8 +106,15 @@ function waitForTabComplete(tabId, timeoutMs) {
 
 async function login({ email, password }) {
   const { token, user } = await api("/auth/login", { method: "POST", body: { email, password }, auth: false });
-  await SecondLookState.updateState({ token, email: user.email, profileType: user.profile_type });
-  return { email: user.email };
+  await SecondLookState.updateState({ token, email: user.email, profileType: user.profile_type, phone: user.phone || null });
+  return { email: user.email, phone: user.phone || null };
+}
+
+// Create an account. phone is optional; the backend stores it as E.164, which links the account to iMessage.
+async function signup({ email, password, phone }) {
+  const { token, user } = await api("/auth/signup", { method: "POST", body: { email, password, phone }, auth: false });
+  await SecondLookState.updateState({ token, email: user.email, profileType: user.profile_type, phone: user.phone || null });
+  return { email: user.email, phone: user.phone || null };
 }
 
 async function analyzeItem({ item }) {
@@ -176,10 +183,11 @@ async function diagnose() {
 
 const handlers = {
   LOGIN: login,
+  SIGNUP: signup,
   LOGOUT: () => SecondLookState.clearState(),
   GET_STATE: async () => {
-    const { email, profileType, token } = await SecondLookState.getState();
-    return { loggedIn: Boolean(token), email, profileType };
+    const { email, profileType, token, phone } = await SecondLookState.getState();
+    return { loggedIn: Boolean(token), email, profileType, phone };
   },
   CHECK_ACTIVE_TAB: checkActiveTab,
   DIAGNOSE: diagnose,

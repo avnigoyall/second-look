@@ -16,11 +16,27 @@ function setStatus(id, text, isError = false) {
   $(id).classList.toggle("error", isError);
 }
 
-function render({ loggedIn, email }) {
-  $("login-view").hidden = loggedIn;
+let authMode = "login"; // "login" | "signup", which form shows while logged out
+
+function render({ loggedIn, email, phone }) {
+  $("login-view").hidden = loggedIn || authMode !== "login";
+  $("signup-view").hidden = loggedIn || authMode !== "signup";
   $("main-view").hidden = !loggedIn;
   $("logout").hidden = !loggedIn;
-  if (loggedIn) $("who").textContent = `Logged in as ${email}`;
+  if (loggedIn) $("who").textContent = phone ? `Logged in as ${email}\niMessage linked: ${formatPhone(phone)}` : `Logged in as ${email}`;
+}
+
+// "+15105550123" -> "(510) 555-0123". Other countries stay in E.164.
+function formatPhone(e164) {
+  const us = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e164 || "");
+  return us ? `(${us[1]}) ${us[2]}-${us[3]}` : e164;
+}
+
+function showAuth(mode) {
+  authMode = mode;
+  setStatus("login-status", "");
+  render({ loggedIn: false });
+  $(mode === "signup" ? "su-email" : "email").focus();
 }
 
 // ---------- session list ----------
@@ -86,9 +102,9 @@ $("login-view").addEventListener("submit", async (e) => {
   button.disabled = true;
   setStatus("login-status", "Logging in...");
   try {
-    const { email } = await send("LOGIN", { email: $("email").value.trim(), password: $("password").value });
+    const { email, phone } = await send("LOGIN", { email: $("email").value.trim(), password: $("password").value });
     $("password").value = "";
-    render({ loggedIn: true, email });
+    render({ loggedIn: true, email, phone });
     setStatus("login-status", "");
   } catch (err) {
     setStatus("login-status", err.message, true);
@@ -96,6 +112,32 @@ $("login-view").addEventListener("submit", async (e) => {
     button.disabled = false;
   }
 });
+
+$("signup-view").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = e.submitter;
+  button.disabled = true;
+  setStatus("login-status", "Creating your account...");
+  try {
+    const { email, phone } = await send("SIGNUP", {
+      email: $("su-email").value.trim(),
+      password: $("su-password").value,
+      phone: $("su-phone").value.trim() || null,
+    });
+    $("su-password").value = "";
+    authMode = "login";
+    render({ loggedIn: true, email, phone });
+    setStatus("login-status", "");
+    setStatus("status", phone ? "Account created. You can also text photos to Second Look on iMessage." : "Account created.");
+  } catch (err) {
+    setStatus("login-status", err.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("to-signup").addEventListener("click", () => showAuth("signup"));
+$("to-login").addEventListener("click", () => showAuth("login"));
 
 $("check").addEventListener("click", async () => {
   $("check").disabled = true;

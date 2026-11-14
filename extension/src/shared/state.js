@@ -8,6 +8,7 @@
     token: null,
     email: null,
     profileType: null,
+    phone: null, // E.164 when the account is linked to iMessage
   });
 
   function normalizeState(state) {
@@ -17,6 +18,7 @@
       token: str(input.token),
       email: str(input.email),
       profileType: str(input.profileType),
+      phone: str(input.phone),
     };
   }
 

@@ -16,6 +16,7 @@ from backend.auth import check_password, create_token, current_user, hash_passwo
 from backend.db import client, closet_items, ensure_indexes, users, verdicts
 from backend.images import decode_base64_image, to_data_url
 from backend.page_reader import ReadPageError, read_page
+from backend.phone import PhoneError, normalize_phone
 from backend.routers import attributes as attributes_router
 from backend.routers import closet as closet_router
 from backend.routers import imessage as imessage_router
@@ -56,7 +57,7 @@ def oid(value: str) -> ObjectId:
 
 def user_out(doc) -> m.User:
     return m.User(id=str(doc["_id"]), email=doc["email"], profile_type=doc["profile_type"],
-                  preference_note=doc.get("preference_note"), created_at=doc["created_at"])
+                  preference_note=doc.get("preference_note"), created_at=doc["created_at"], phone=doc.get("phone"))
 
 
 def closet_out(doc, include_image=True) -> m.ClosetItem:
@@ -99,7 +100,14 @@ def health():
 
 
 @app.post("/auth/signup", response_model=m.AuthResponse)
-def signup(body: m.Credentials):
+def signup(body: m.SignupRequest):
+    """phone is optional. When given it is stored as E.164 (backend/phone.py), which links the account to iMessage."""
+    phone = None
+    if body.phone and body.phone.strip():
+        try:
+            phone = normalize_phone(body.phone)
+        except PhoneError as e:
+            raise HTTPException(422, str(e))
     doc = {
         "email": body.email,
         "password_hash": hash_password(body.password),
@@ -110,9 +118,13 @@ def signup(body: m.Credentials):
         "preference_note": None,
         "created_at": now(),
     }
+    if phone:
+        doc["phone"] = phone  # left out when absent: the unique index on phone is sparse
     try:
         doc["_id"] = users.insert_one(doc).inserted_id
-    except DuplicateKeyError:
+    except DuplicateKeyError as e:
+        if phone and "phone" in str(e.details.get("keyPattern", {})):
+            raise HTTPException(409, "This phone number is already linked to another account")
         raise HTTPException(409, "An account with this email already exists")
     return {"token": create_token(str(doc["_id"])), "user": user_out(doc)}
 

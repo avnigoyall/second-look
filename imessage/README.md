@@ -19,8 +19,12 @@ iMessage photo -> Photon -> poll.mjs -> handle-message.mjs
 an email      ->      POST /imessage/link -> sets users.phone for that account
 ```
 
-A phone must be linked to a Second Look account once. The first photo from an unknown number gets
-"reply with the email you use for Second Look". Linking trusts the texter (fine for the demo, see Known limits).
+A phone must be linked to a Second Look account once, in either of two ways:
+
+- At sign-up: the extension popup's "Create an account" form has an optional phone field. `POST /auth/signup`
+  stores it as E.164 (`backend/phone.py`), the same form Photon reports for the sender, so it links right away.
+- Over iMessage: the first photo from an unknown number gets "reply with the email you use for Second Look".
+  This path trusts the texter (fine for the demo, see Known limits).
 
 ## Setup
 
@@ -55,7 +59,11 @@ cd imessage && node src/poll.mjs
 ## Backend additions (for CONTRACT.md)
 
 - `backend/routers/imessage.py`: `POST /imessage/link`, `/imessage/analyze`, `/imessage/own`. Header `X-Agent-Secret`.
-- `users.phone`: optional, unique sparse index.
+- `users.phone`: optional, E.164, unique sparse index (created in `ensure_indexes()`).
+- `POST /auth/signup` takes optional `phone` (any common format, 10 digits read as US). 422 when it is not a
+  phone number, 409 "This phone number is already linked to another account". `User` responses gain `phone`.
+- Extension popup: "Create an account" form (email, password, optional phone); background handler `SIGNUP`;
+  `phone` kept in the stored login state.
 - Verdict docs from iMessage get `channel: "imessage"` and `ownership: "yes" | "no"` after the answer.
   `item.image_url` is set to null after saving (the photo is kept as `target_crop`).
 - `fetch_image()` also accepts `data:image/...` URLs.

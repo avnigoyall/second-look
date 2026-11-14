@@ -18,6 +18,18 @@
     <label>Email <input id="email" type="email" autocomplete="username" required></label>
     <label>Password <input id="password" type="password" autocomplete="current-password" required></label>
     <button type="submit" class="primary">Log in</button>
+    <p class="switch small muted">New to Second Look? <button type="button" id="to-signup" class="link">Create an account</button></p>
+  </form>
+
+  <form id="signup-view" hidden>
+    <label>Email <input id="su-email" type="email" autocomplete="email" required></label>
+    <label>Password <input id="su-password" type="password" autocomplete="new-password" minlength="6" required></label>
+    <label><span>Phone number <span class="optional">optional</span></span>
+      <input id="su-phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="(510) 555-0123">
+    </label>
+    <p class="hint small muted">Add the number you text from to send Second Look photos over iMessage. Your closet is the same in both places.</p>
+    <button type="submit" class="primary">Create account</button>
+    <p class="switch small muted">Already have an account? <button type="button" id="to-login" class="link">Log in</button></p>
   </form>
 
   <main id="main-view" hidden>

@@ -72,6 +72,7 @@ class User(BaseModel):
     profile_type: ProfileType
     preference_note: str | None = None
     created_at: datetime
+    phone: str | None = Field(None, description="E.164. Links the account to the iMessage agent (imessage/)")
 
 
 class ClosetItem(BaseModel):
@@ -143,6 +144,11 @@ class Credentials(BaseModel):
         if "@" not in v or "." not in v.split("@")[-1]:
             raise ValueError("not a valid email address")
         return v
+
+
+class SignupRequest(Credentials):
+    phone: str | None = Field(None, max_length=40,
+                              description="Optional. Any common format; stored as E.164 to link iMessage")
 
 
 class AnalyzeRequest(BaseModel):
