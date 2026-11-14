@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 from pymongo import ASCENDING, DESCENDING
 
 from backend.db import closet_items, users, verdicts
+from backend.phone import PhoneError
+from backend.phone import normalize_phone as to_e164
 from backend.services.closet import item_name, new_closet_doc
 from backend.services.embeddings import EmbeddingError
 from backend.services.verdict import decide
@@ -42,11 +44,11 @@ def require_agent(secret: str | None) -> None:
 
 
 def normalize_phone(phone: str) -> str:
-    """Keep a leading + and the digits, so "+1 (510) 573-3065" and "+15105733065" are the same key."""
-    digits = re.sub(r"\D", "", phone or "")
-    if len(digits) < 7:
-        raise HTTPException(422, "phone is not a phone number")
-    return ("+" if phone.strip().startswith("+") else "") + digits
+    """E.164, the same form signup stores, so a Photon handle finds the account. 422 when it is not a phone."""
+    try:
+        return to_e164(phone)
+    except PhoneError as e:
+        raise HTTPException(422, str(e))
 
 
 def user_for_phone(phone: str) -> dict | None:
@@ -58,8 +60,7 @@ _indexes_ready = False
 
 def ensure_phone_index() -> None:
     global _indexes_ready
-    if not _indexes_ready:
-        users.create_index([("phone", ASCENDING)], unique=True, sparse=True)
+    if not _indexes_ready:  # users.phone is indexed in backend/db.py ensure_indexes()
         verdicts.create_index([("user_id", ASCENDING), ("channel", ASCENDING), ("created_at", DESCENDING)])
         _indexes_ready = True
 

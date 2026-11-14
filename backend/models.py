@@ -72,6 +72,7 @@ class User(BaseModel):
     profile_type: ProfileType
     preference_note: str | None = None
     created_at: datetime
+    phone: str | None = Field(None, description="E.164. Links the account to the iMessage agent (imessage/)")
 
 
 class ClosetItem(BaseModel):
@@ -143,6 +144,11 @@ class Credentials(BaseModel):
         if "@" not in v or "." not in v.split("@")[-1]:
             raise ValueError("not a valid email address")
         return v
+
+
+class SignupRequest(Credentials):
+    phone: str | None = Field(None, max_length=40,
+                              description="Optional. Any common format; stored as E.164 to link iMessage")
 
 
 class AnalyzeRequest(BaseModel):
@@ -433,6 +439,22 @@ class DashboardResponse(BaseModel):
     waste_avoided: float | None = None
     verdicts: list[Verdict]
     cost_per_wear: float | None = None
+
+
+class ImpactSource(BaseModel):
+    category: str
+    kg_co2e: float
+    source: str
+    url: str
+
+
+class ImpactResponse(BaseModel):
+    """GET /impact. Totals over verdicts the shopper skipped. CO2e is an estimate from config/impact.json."""
+    money_kept: float
+    items_skipped: int
+    co2e_kg: float = Field(description="Lifecycle kg CO2e of skipped items in categories with a sourced figure")
+    co2e_items_counted: int = Field(description="How many skipped items had a sourced figure")
+    co2e_sources: list[ImpactSource] = []
 
 
 class TrendsResponse(BaseModel):

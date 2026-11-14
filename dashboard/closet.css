@@ -1,8 +1,8 @@
 /* Second Look closet review page. Tokens match dashboard/index.html. */
 :root {
-  --bg: #faf8f4; --card: #ffffff; --ink: #1d1b18; --muted: #6b665e; --line: #e7e2d9;
-  --accent: #2f6b4f; --accent-ink: #ffffff; --danger: #a33a2b; --warn: #a8620a; --have: #3b5ba5;
-  --soft: #f3efe7;
+  --bg: #f8f6fb; --card: #ffffff; --ink: #1e1a24; --muted: #6a6275; --line: #e6e0ee;
+  --accent: #4b2a7b; --accent-ink: #ffffff; --danger: #a33a2b; --warn: #a8620a; --have: #3b5ba5;
+  --soft: #f2eef7;
   --shadow-border:
     0px 0px 0px 1px oklch(0 0 0 / 0.06),
     0px 1px 2px -1px oklch(0 0 0 / 0.06),
@@ -19,9 +19,9 @@
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161513; --card: #1f1e1b; --ink: #f1ede6; --muted: #a39d93; --line: #34312c;
-    --accent: #5fae86; --accent-ink: #10221a; --danger: #e07a6a; --warn: #e6a454; --have: #8aa6e8;
-    --soft: #282622;
+    --bg: #15121b; --card: #1e1a26; --ink: #f2eef7; --muted: #a69db2; --line: #362f40;
+    --accent: #b79cf0; --accent-ink: #1e1230; --danger: #e07a6a; --warn: #e6a454; --have: #8aa6e8;
+    --soft: #26202d;
     --shadow-border: 0 0 0 1px oklch(1 0 0 / 0.08);
     --shadow-border-hover: 0 0 0 1px oklch(1 0 0 / 0.13);
     --image-outline: oklch(1 0 0 / 0.1);

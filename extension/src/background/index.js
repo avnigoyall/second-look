@@ -109,8 +109,15 @@ function waitForTabComplete(tabId, timeoutMs) {
 
 async function login({ email, password }) {
   const { token, user } = await api("/auth/login", { method: "POST", body: { email, password }, auth: false });
-  await SecondLookState.updateState({ token, email: user.email, profileType: user.profile_type });
-  return { email: user.email };
+  await SecondLookState.updateState({ token, email: user.email, profileType: user.profile_type, phone: user.phone || null });
+  return { email: user.email, phone: user.phone || null };
+}
+
+// Create an account. phone is optional; the backend stores it as E.164, which links the account to iMessage.
+async function signup({ email, password, phone }) {
+  const { token, user } = await api("/auth/signup", { method: "POST", body: { email, password, phone }, auth: false });
+  await SecondLookState.updateState({ token, email: user.email, profileType: user.profile_type, phone: user.phone || null });
+  return { email: user.email, phone: user.phone || null };
 }
 
 async function analyzeItem({ item }) {
@@ -179,6 +186,41 @@ async function checkActiveTab() {
   return { started: true };
 }
 
+// Is the active tab a product page? Local signals only (no backend, no Gemini), so the popup opens fast:
+// Product JSON-LD, og:type "product", a product price meta tag, or an Add to cart button (stores like Zara
+// have no JSON-LD). Any other page (Google, news, chrome://) gets the savings summary instead of "Check this item".
+async function pageKind() {
+  let tab;
+  try {
+    tab = await activeTab();
+  } catch {
+    return { product: false, reason: "not a web page" };
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["src/content/reader/price.js", "src/content/reader/jsonld.js", "src/content/matchers.js"],
+    });
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const meta = (sel) => document.querySelector(sel)?.getAttribute("content")?.trim() || "";
+        const jsonld = Boolean(globalThis.SecondLookJsonLd?.readJsonLd()?.name);
+        const ogProduct = /product/i.test(meta('meta[property="og:type"]'));
+        const priceMeta = Boolean(meta('meta[property="product:price:amount"]') || meta('meta[property="og:price:amount"]')
+          || document.querySelector('[itemprop="price"]'));
+        const m = globalThis.SecondLookMatchers;
+        const addToCart = Boolean(m && m.candidates(m.isAddToCart).length);
+        return { product: jsonld || ogProduct || priceMeta || addToCart, signals: { jsonld, ogProduct, priceMeta, addToCart } };
+      },
+    });
+    return injection?.result ?? { product: false, reason: "no result" };
+  } catch (err) {
+    // Pages the extension cannot script (Chrome Web Store, PDF viewer) are not stores.
+    return { product: false, reason: String(err?.message || err).slice(0, 120) };
+  }
+}
+
 async function diagnose() {
   const tab = await activeTab();
   await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [...READER_FILES, "src/content/diagnose.js"] });
@@ -191,12 +233,15 @@ async function diagnose() {
 
 const handlers = {
   LOGIN: login,
+  SIGNUP: signup,
   LOGOUT: () => SecondLookState.clearState(),
   GET_STATE: async () => {
-    const { email, profileType, token } = await SecondLookState.getState();
-    return { loggedIn: Boolean(token), email, profileType };
+    const { email, profileType, token, phone } = await SecondLookState.getState();
+    return { loggedIn: Boolean(token), email, profileType, phone };
   },
   CHECK_ACTIVE_TAB: checkActiveTab,
+  PAGE_KIND: pageKind,
+  IMPACT: () => api("/impact"),
   DIAGNOSE: diagnose,
   ANALYZE_ITEM: analyzeItem,
   READ_PAGE: ({ url, text, image_url }) => api("/read-page", { method: "POST", body: { url, text, image_url } }),

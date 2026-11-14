@@ -13,7 +13,8 @@
   const svg = (paths, stroke = 2) =>
     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
   const ICONS = {
-    brand: svg('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/>', 2.5),
+    // Logo: a "2" drawn as a hanger (hook = top of the 2, light stroke = the hanger's other shoulder).
+    brand: svg('<path d="M12.6 11.2 20.2 18.6" stroke-width="2" opacity="0.45"/><path d="M8.4 7.1C8.4 4.9 10 3.4 12.1 3.4c2.1 0 3.6 1.5 3.6 3.4 0 1.7-1.1 2.8-3.1 4.4l-8.8 7.4h16.4"/>', 2.4),
     close: svg('<path d="M18 6 6 18M6 6l12 12"/>'),
     alert: svg('<circle cx="12" cy="12" r="9"/><path d="M12 8v4.5M12 16h.01"/>'),
     check: svg('<path d="M20 6 9 17l-5-5"/>'),
@@ -202,12 +203,14 @@
       status.append(el("span", { class: "saved-icon", html: ICONS.check }), el("span", { text }));
     };
 
-    const skip = el("button", { class: "btn primary", text: "Skip it" });
-    const buy = el("button", { class: "btn secondary", text: "Buy anyway" });
+    // The highlighted (primary) button follows the verdict: "Buy it" for a good buy, "Skip it" otherwise.
+    const goodBuy = result.verdict === "good_buy";
+    const skip = el("button", { class: `btn ${goodBuy ? "secondary" : "primary"}`, text: goodBuy ? "Skip it anyway" : "Skip it" });
+    const buy = el("button", { class: `btn ${goodBuy ? "primary" : "secondary"}`, text: goodBuy ? "Buy it" : "Buy anyway" });
     const up = el("button", { class: "btn thumb", "aria-label": "Thumbs up", "aria-pressed": "false", html: ICONS.up });
     const down = el("button", { class: "btn thumb", "aria-label": "Thumbs down", "aria-pressed": "false", html: ICONS.down });
 
-    const actions = el("div", { class: "row" }, [skip, buy, up, down]);
+    const actions = el("div", { class: "row" }, goodBuy ? [buy, skip, up, down] : [skip, buy, up, down]);
     b.append(
       itemRow(item),
       el("span", { class: `badge ${result.verdict}`, text: LABELS[result.verdict] || result.verdict }),
@@ -251,7 +254,7 @@
     }
     up.addEventListener("click", () => rate("up", up, down));
     down.addEventListener("click", () => rate("down", down, up));
-    skip.focus({ preventScroll: true });
+    (goodBuy ? buy : skip).focus({ preventScroll: true }); // focus the highlighted button
 
     // Lets flow.js add the ownership question later, only while this verdict is still on screen.
     return {

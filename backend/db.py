@@ -19,6 +19,7 @@ ingest_jobs = db["ingest_jobs"]
 
 def ensure_indexes():
     users.create_index([("email", ASCENDING)], unique=True)
+    users.create_index([("phone", ASCENDING)], unique=True, sparse=True)  # E.164, links iMessage (backend/phone.py)
     verdicts.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     closet_items.create_index([("user_id", ASCENDING), ("created_at", ASCENDING)])
     closet_items.create_index([("source_verdict_id", ASCENDING)], unique=True, sparse=True)  # one auto-add per verdict
