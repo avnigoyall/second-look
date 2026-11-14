@@ -1,7 +1,7 @@
 """Pydantic request and response models. FastAPI's /docs page is built from these, so they are the API contract."""
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StrictInt, StrictStr, field_validator, model_serializer, model_validator
 
 from backend.settings import ATTRIBUTES
 from backend.timeutil import UtcDateTime
@@ -306,10 +306,27 @@ class TransferResult(BaseModel):
     amount_cents: int | None = None
 
 
+class ActionGoal(BaseModel):
+    """The savings goal after this skip (section 15). saved_cents counts this transfer when it is done."""
+    name: str
+    target_cents: int
+    saved_cents: int
+    reached: bool
+
+
 class ActionResponse(BaseModel):
     ok: bool
     balances: Balances
     transfer: TransferResult | None = Field(None, description="Set on skipped for Nessie users only (Part 6)")
+    goal: ActionGoal | None = Field(None, description="Only on skipped, only when the user has a goal. "
+                                                      "Left out of the response otherwise (section 15)")
+
+    @model_serializer(mode="wrap")
+    def _drop_absent_goal(self, handler):
+        data = handler(self)
+        if self.goal is None:
+            data.pop("goal", None)  # "absent otherwise": the card checks for the field, not for null
+        return data
 
 
 class SavingsTransfer(BaseModel):
@@ -459,6 +476,57 @@ class ImpactResponse(BaseModel):
     co2e_kg: float = Field(description="Lifecycle kg CO2e of skipped items in categories with a sourced figure")
     co2e_items_counted: int = Field(description="How many skipped items had a sourced figure")
     co2e_sources: list[ImpactSource] = []
+
+
+# ---------- savings goal (section 15) ----------
+
+GOAL_NAME_MAX = 40
+GOAL_TARGET_MIN_CENTS = 500
+GOAL_TARGET_MAX_CENTS = 10_000_000
+
+
+class GoalRequest(BaseModel):
+    """PUT /goal. name is trimmed, then 1 to 40 characters. target_cents is an integer (no floats, no strings)."""
+    name: StrictStr
+    target_cents: StrictInt = Field(ge=GOAL_TARGET_MIN_CENTS, le=GOAL_TARGET_MAX_CENTS)
+
+    @field_validator("name")
+    @classmethod
+    def trimmed_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("name must not be blank")
+        if len(value) > GOAL_NAME_MAX:
+            raise ValueError(f"name must be at most {GOAL_NAME_MAX} characters")
+        return value
+
+
+class Goal(BaseModel):
+    name: str
+    target_cents: int
+    saved_cents: int
+    percent: int = Field(description="min(100, floor(saved_cents * 100 / target_cents))")
+    reached: bool
+    source: Literal["nessie", "local"] = Field(
+        description="nessie: projected Nessie Savings balance. local: round(money_kept * 100)")
+
+
+class GoalResponse(BaseModel):
+    goal: Goal | None = None
+
+
+class GoalItem(BaseModel):
+    verdict_id: str
+    name: str
+    store: str | None = None
+    price_cents: int | None = None
+    image_url: str | None = None
+    skipped_at: UtcDateTime = Field(description="The verdict's created_at")
+    moved_cents: int | None = Field(None, description="transfer.amount_cents when transfer.status is done")
+
+
+class GoalItemsResponse(BaseModel):
+    items: list[GoalItem]
 
 
 class TrendsResponse(BaseModel):

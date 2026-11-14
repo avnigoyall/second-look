@@ -132,6 +132,8 @@ def retry_skip(verdict_id) -> None:
             nessie.wait_settled(e.deposit_id, TOPUP_WAIT_S)
             result = nessie.skip_transfer(user, verdict, Deadline(RETRY_BUDGET_S), check_existing=True)
         _save_transfer(verdict_id, result)
+        from backend.services.goal import forget_savings  # lazy: goal imports this module
+        forget_savings(verdict["user_id"])  # the goal's 15 s Savings cache now misses this transfer
     except Exception as e:
         message = nessie.scrub(str(e))[:200]
         log.warning("skip transfer for verdict %s failed after retry: %s", verdict_id, message)

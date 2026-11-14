@@ -23,10 +23,12 @@ from backend.price_reader import read_price
 from backend.phone import PhoneError, normalize_phone
 from backend.routers import attributes as attributes_router
 from backend.routers import closet as closet_router
+from backend.routers import goal as goal_router
 from backend.routers import imessage as imessage_router
 from backend.routers import trends as trends_router
 from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
 from backend.services.embeddings import EmbeddingError
+from backend.services.goal import action_goal
 from backend.services.money import money_kept, on_skip, savings_summary
 from backend.services.verdict import decide
 from backend.settings import ROOT
@@ -46,6 +48,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
                    expose_headers=["X-Server-Ms", "Server-Timing"])
 app.include_router(attributes_router.router)
 app.include_router(closet_router.router)
+app.include_router(goal_router.router)
 app.include_router(trends_router.router)
 app.include_router(imessage_router.router)
 
@@ -196,14 +199,24 @@ def action(body: m.ActionRequest, background: BackgroundTasks, user=Depends(curr
     background. Other users keep placeholder balances and make no Nessie call.
     "bought" adds the item to the closet as incoming (Part 3), after the response, unless the user turned off
     settings.auto_add_purchases. It makes no Nessie call.
+    "goal" (section 15): only on skipped and only when the user has a goal, computed after the transfer.
     """
     doc = own_verdict(body.verdict_id, user)
     verdicts.update_one({"_id": doc["_id"]}, {"$set": {"action": body.action}})
     if body.action == "bought" and (user.get("settings") or {}).get("auto_add_purchases") is not False:
         background.add_task(auto_add_purchase, doc["_id"])
     transfer, balances = on_skip(user, doc, background) if body.action == "skipped" else (None, None)
-    return {"ok": True, "transfer": transfer,
-            "balances": m.Balances(**balances, placeholder=False) if balances else m.Balances()}
+    out = {"ok": True, "transfer": transfer,
+           "balances": m.Balances(**balances, placeholder=False) if balances else m.Balances()}
+    if body.action == "skipped":  # section 15: bought stays free of Nessie calls, so it carries no goal
+        try:
+            goal = action_goal(user, transfer, balances)
+        except Exception as e:  # the goal line is extra: it never fails the skip
+            timing_log.warning("action goal unavailable: %s", str(e)[:200])
+            goal = None
+        if goal:
+            out["goal"] = goal
+    return out
 
 
 @app.get("/savings", response_model=m.SavingsResponse)
