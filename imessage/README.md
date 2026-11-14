@@ -54,9 +54,19 @@ Requires Node.js 24+ and the backend (see the root README).
 1. Root `.env` (shared with the backend) needs, besides the backend's own keys:
    - `IMESSAGE_AGENT_SECRET`: any long random string. The backend and the agent must use the same value.
    - `GEMINI_MODEL` and `CLAUDE_MODEL`: the backend needs both for verdicts (team values: `gemini-3.5-flash-lite`, `claude-haiku-5-5`).
-2. Photon variables from `imessage/.env.example`, in your shell or the root `.env`.
-3. In the Photon dashboard, add the iMessage number you will text from and assign a shared-pool number to the
-   project. Text the agent first. A shared line cannot send the first message.
+2. Photon variables from `imessage/.env.example`, in your shell or the root `.env`. The backend reads
+   `PHOTON_PROJECT_ID` and `PHOTON_API_KEY` too, to assign lines.
+3. Lines are assigned automatically. When an account has a phone (set at sign-up, or with "Connect iMessage"
+   in the popup), the backend asks Photon for a shared line for that phone
+   (`POST /v1/projects/{id}/platforms/imessage/assignments`, one seat each) and the popup shows
+   "Text Second Look at <line> to start". The shopper must text that line first; a shared line cannot send the
+   first message. Each shopper may get a different line.
+   Manual fallback: in the Photon dashboard, add the number you will text from and assign it a shared-pool line,
+   then text that line.
+
+The agent replies from the line that received each message (`receivedBy.id` on the Photon message, see
+`replySenderId` in `src/route.mjs`). `PHOTON_AGENT_HANDLE` is only the fallback sender when Photon leaves
+`receivedBy` out, and the line `test-imessage.mjs` sends from.
 
 ```bash
 cd imessage && npm install
@@ -93,6 +103,11 @@ cd imessage && node src/poll.mjs
   `item.image_url` is set to null after saving (the photo is kept as `target_crop`).
 - `fetch_image()` also accepts `data:image/...` URLs.
 - `python-multipart` added to `backend/requirements.txt` (the closet router needs it; it was missing).
+- Automatic lines (`backend/services/photon_lines.py`): `POST /imessage/connect {phone?}` and
+  `GET /imessage/status` (JWT, for the extension) return `{status: none|assigning|pending_optin|connected|error,
+  line, phone, message}`. Signup with a phone assigns in a background task after the response. Users gain
+  `photon_assignment_id`, `photon_line`, `photon_handle`, `photon_opt_in`, `photon_assigned_at`,
+  `photon_checked_at`, `photon_error`, `photon_assigning_at`; `User` responses gain `imessage_line`.
 
 ## Known limits
 
