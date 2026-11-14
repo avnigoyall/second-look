@@ -1,0 +1,30 @@
+{
+  "name": "second-look",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/avnigoyall/Second-Look.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/avnigoyall/Second-Look/issues"
+  },
+  "homepage": "https://github.com/avnigoyall/Second-Look#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@google/genai": "^3.3.0",
+    "@photon-ai/api": "^0.5.0",
+    "heic-convert": "^2.1.0",
+    "mongodb": "^7.9.0",
+    "sharp": "^0.35.5",
+    "zod": "^4.6.7"
+  }
+}
