@@ -59,7 +59,8 @@ const check = (ok, name, detail = "") => { results.push([ok, name]); console.log
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // mode: "ok" | "never" (loading) | "offline" | "timeout"
-async function open(browser, { width, scheme, response, mode = "ok" }) {
+// action: what SEND_ACTION answers. { data } resolves, { error, code } fails, delayMs waits first.
+async function open(browser, { width, scheme, response, mode = "ok", action = { data: { ok: true } } }) {
   const ctx = await browser.newContext({ viewport: { width, height: width < 500 ? 844 : 800 }, colorScheme: scheme, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
   page.errors = [];
@@ -70,8 +71,9 @@ async function open(browser, { width, scheme, response, mode = "ok" }) {
     main{display:flex;gap:32px;padding:24px;flex-wrap:wrap} .ph{width:420px;max-width:100%;aspect-ratio:3/4;background:#e9e6e1}
     button{padding:12px 24px;background:#111;color:#fff;border:0;font:inherit}</style></head>
     <body><header>EXAMPLE STORE</header><main><div class="ph"></div><div><h1>${ITEM.name}</h1><p>$49.90</p><button id="add">Add to cart</button></div></main></body></html>`);
-  await page.evaluate(({ response, mode, item, ownership }) => {
+  await page.evaluate(({ response, mode, item, ownership, action }) => {
     window.__calls = [];
+    window.__actions = [];
     window.chrome = { runtime: { sendMessage: (msg) => {
       window.__calls.push(msg.type);
       const ok = (data) => Promise.resolve({ ok: true, data });
@@ -84,11 +86,16 @@ async function open(browser, { width, scheme, response, mode = "ok" }) {
         case "GET_ATTRIBUTES": return ok({ status: "ok", category: "jeans", color_family: "blue", fabric: "denim", fabric_confidence: "high", cut: "wide", style: "streetwear", description: "x", is_apparel: true, attribute_string: "x" });
         case "OWNERSHIP_OPTIONS": return ok(ownership);
         case "OWNERSHIP_ANSWER": window.__answer = msg.payload; return ok({ item: { id: "new" } });
+        case "SEND_ACTION": {
+          window.__actions.push(msg.payload.action);
+          const res = action.error ? { ok: false, code: action.code, error: action.error } : { ok: true, data: action.data };
+          return new Promise((r) => setTimeout(() => r(res), action.delayMs || 0));
+        }
         default: return ok({ ok: true });
       }
     } } };
     window.SecondLookReader = { readItem: async () => item };
-  }, { response, mode, item: ITEM, ownership: OWNERSHIP });
+  }, { response, mode, item: ITEM, ownership: OWNERSHIP, action });
   for (const code of SCRIPTS) await page.addScriptTag({ content: code });
   await page.evaluate(() => { globalThis.SecondLookFlow.runCheck(); }); // do not wait: "never" mode stays pending
   return { ctx, page, card: page.locator("#secondlook-shadow-host .card") };
@@ -136,7 +143,7 @@ async function shot(page, name) {
       check((await src.getAttribute("href")) === RESPONSES.trend.matched_trend.sources[0].url && (await src.getAttribute("target")) === "_blank", "micro_trend: source link opens in a new tab");
       check(/fade in about 3 months/.test(await s.card.innerText()), "micro_trend: lifespan shown next to its source");
       const links = s.card.locator("a.alt-link");
-      check(await links.count() === 3, "micro_trend: 3 alternative links");
+      check(await links.count() === 2, "micro_trend: at most 2 alternative links");
       check((await links.nth(0).getAttribute("href")) === RESPONSES.trend.alternatives[0].url && (await links.nth(0).getAttribute("rel")).includes("noopener"), "micro_trend: alternative href and rel");
       check(/\$79\.50/.test(await links.nth(0).innerText()), "micro_trend: alternative price");
     }
@@ -194,6 +201,53 @@ async function shot(page, name) {
     shots.push(await shot(s.page, `unavailable-${v.tag}`)); await done(s);
   }
 
+  // Part 6: the confirmation after Skip it and Buy anyway, for each /action response shape.
+  const balances = { checking_cents: 120000, savings_cents: 52577, placeholder: false };
+  const PENDING = "Skipped. Savings update pending";
+  const ACTION_CASES = [
+    { tag: "done", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "done", amount_cents: 2577 } } }, expect: "Skipped. $25.77 moved to savings", saved: true },
+    { tag: "pending", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "pending", amount_cents: 2577 } } }, expect: PENDING },
+    { tag: "failed", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "failed", amount_cents: 2577 } } }, expect: PENDING },
+    { tag: "no-price", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "no_price", amount_cents: null } } }, expect: PENDING },
+    { tag: "done-no-amount", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "done", amount_cents: null } } }, expect: PENDING },
+    { tag: "no-transfer", click: "Skip it", action: { data: { ok: true, balances: { checking_cents: null, savings_cents: null, placeholder: true } } }, expect: PENDING },
+    { tag: "timeout", click: "Skip it", action: { code: "timeout", error: "Second Look took longer than 15 seconds to answer.", delayMs: 300 }, expect: PENDING },
+    { tag: "error", click: "Skip it", action: { code: "offline", error: "Cannot reach the Second Look server. Is it running on localhost:8000?" }, expect: "Cannot reach the Second Look server. Is it running on localhost:8000?", error: true },
+    { tag: "buy", click: "Buy anyway", action: { data: { ok: true, balances } }, expect: "Marked as bought." },
+  ];
+  for (const v of variants) {
+    for (const c of ACTION_CASES) {
+      const s = await open(browser, { ...v, response: RESPONSES.good, action: c.action });
+      await s.card.locator(".badge").waitFor();
+      await s.card.getByRole("button", { name: c.click }).click();
+      const status = s.card.locator(".status");
+      await status.filter({ hasText: c.expect }).waitFor({ timeout: 3000 }).catch(() => {});
+      const text = (await status.innerText()).trim();
+      if (v.tag === "desktop-light") {
+        check(text === c.expect, `action ${c.tag}: "${c.expect}"`, text);
+        const cls = await status.getAttribute("class");
+        check(/saved/.test(cls) === !!c.saved && /error/.test(cls) === !!c.error, `action ${c.tag}: status style`, cls);
+        const disabled = await s.card.getByRole("button", { name: "Skip it" }).isDisabled();
+        check(disabled === !c.error, `action ${c.tag}: buttons ${c.error ? "re-enabled for retry" : "stay disabled"}`);
+        check((await s.page.evaluate(() => window.__actions)).join() === (c.click === "Skip it" ? "skipped" : "bought"), `action ${c.tag}: one action sent`);
+      }
+      shots.push(await shot(s.page, `action-${c.tag}-${v.tag}`));
+      errors.push(...s.page.errors); await s.ctx.close();
+    }
+  }
+
+  // a slow /action never blocks the card: it shows Saving... and still closes
+  {
+    const s = await open(browser, { width: 1280, scheme: "light", response: RESPONSES.good, action: { data: { ok: true }, delayMs: 60000 } });
+    await s.card.locator(".badge").waitFor();
+    await s.card.getByRole("button", { name: "Skip it" }).click();
+    check((await s.card.locator(".status").innerText()) === "Saving...", "action slow: Saving... while waiting");
+    await s.card.getByRole("button", { name: "Close" }).click();
+    await s.card.waitFor({ state: "detached", timeout: 2000 });
+    check(true, "action slow: card still closes");
+    errors.push(...s.page.errors); await s.ctx.close();
+  }
+
   // timeout also lands in unavailable; Try again re-runs the check
   {
     const s = await open(browser, { width: 1280, scheme: "light", response: null, mode: "timeout" });
@@ -210,7 +264,7 @@ async function shot(page, name) {
   {
     const s = await open(browser, { width: 1280, scheme: "light", response: RESPONSES.old });
     await s.card.locator(".badge").waitFor();
-    check(await s.card.locator(".alt-link").count() === 1 && await s.card.locator("a.alt-link").count() === 0, "old backend: alternative without url renders as text");
+    check(await s.card.locator(".alts").count() === 0, "old backend: alternative without url is skipped");
     check(await s.card.locator("a.source").count() === 0 && await s.card.locator(".trend-name").count() === 1, "old backend: trend without sources has no link");
     check(await s.card.locator(".own").count() === 0, "old backend: no ownership question");
     shots.push(await shot(s.page, "old-backend-desktop-light"));
