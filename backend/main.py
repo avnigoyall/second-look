@@ -21,6 +21,7 @@ from backend.routers import closet as closet_router
 from backend.routers import trends as trends_router
 from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
 from backend.services.embeddings import EmbeddingError
+from backend.services.money import money_kept, on_skip, savings_summary
 from backend.services.verdict import decide
 from backend.settings import ROOT
 
@@ -139,16 +140,27 @@ def analyze(body: m.AnalyzeRequest, user=Depends(current_user)):
 
 @app.post("/action", response_model=m.ActionResponse)
 def action(body: m.ActionRequest, background: BackgroundTasks, user=Depends(current_user)):
-    """STUB: records the action. Balances are a placeholder until Nessie is wired in.
+    """Records the action.
 
-    "bought" also adds the item to the closet as incoming (Part 3), after the response, unless the user
-    turned off settings.auto_add_purchases. The response does not change.
+    "skipped" (Part 6): for Nessie users, moves the item price from Checking to Savings within about 3 s and
+    returns real balances plus `transfer`. A slow or failed transfer answers "pending" and retries once in the
+    background. Other users keep placeholder balances and make no Nessie call.
+    "bought" adds the item to the closet as incoming (Part 3), after the response, unless the user turned off
+    settings.auto_add_purchases. It makes no Nessie call.
     """
     doc = own_verdict(body.verdict_id, user)
     verdicts.update_one({"_id": doc["_id"]}, {"$set": {"action": body.action}})
     if body.action == "bought" and (user.get("settings") or {}).get("auto_add_purchases") is not False:
         background.add_task(auto_add_purchase, doc["_id"])
-    return {"ok": True, "balances": m.Balances()}
+    transfer, balances = on_skip(user, doc, background) if body.action == "skipped" else (None, None)
+    return {"ok": True, "transfer": transfer,
+            "balances": m.Balances(**balances, placeholder=False) if balances else m.Balances()}
+
+
+@app.get("/savings", response_model=m.SavingsResponse)
+def savings(user=Depends(current_user)):
+    """Checking and Savings in cents. source nessie for Nessie users when Nessie answers, else local."""
+    return savings_summary(user)
 
 
 @app.post("/feedback", response_model=m.OkResponse)
@@ -211,14 +223,8 @@ def list_closet(include_images: int = 0, status: m.ClosetStatus | None = None, u
 
 @app.get("/dashboard", response_model=m.DashboardResponse)
 def dashboard(user=Depends(current_user)):
-    pipeline = [
-        {"$match": {"user_id": user["_id"], "action": "skipped"}},
-        {"$group": {"_id": None, "total": {"$sum": "$item.price"}}},
-    ]
-    result = list(verdicts.aggregate(pipeline))
-    money_kept = round(result[0]["total"], 2) if result else 0.0
     recent = verdicts.find({"user_id": user["_id"]}).sort("created_at", -1).limit(50)
-    return {"money_kept": money_kept, "waste_avoided": None,
+    return {"money_kept": money_kept(user["_id"]), "waste_avoided": None,
             "verdicts": [verdict_out(d) for d in recent], "cost_per_wear": None}
 
 
