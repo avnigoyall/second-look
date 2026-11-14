@@ -11,10 +11,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 NESSIE_URL = "https://v2-prod-api.nessieisreal.com"
+TIMEOUT_S = 30  # per call, so one stuck service cannot hang the whole check
 
 
 def report(name: str, ok: bool, detail: str = ""):
-    print(f"{'PASS' if ok else 'FAIL'}  {name}{'  - ' + detail if detail else ''}")
+    print(f"{'PASS' if ok else 'FAIL'}  {name}{'  - ' + detail if detail else ''}", flush=True)
 
 
 def short_error(e: Exception) -> str:
@@ -47,7 +48,7 @@ def check_claude():
         return report("Claude", False, "CLAUDE_MODEL is not set. Set it to a small, cheap model id in .env")
     try:
         import anthropic
-        anthropic.Anthropic(api_key=key).messages.create(
+        anthropic.Anthropic(api_key=key, timeout=TIMEOUT_S, max_retries=0).messages.create(
             model=model, max_tokens=5, messages=[{"role": "user", "content": "Reply with OK."}])
         report("Claude", True, f"{model} replied")
     except Exception as e:
@@ -63,7 +64,7 @@ def check_gemini():
         return
     from google import genai
     from google.genai import types
-    client = genai.Client(api_key=key)
+    client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=TIMEOUT_S * 1000))
 
     try:
         client.models.generate_content(model=model, contents="Reply with OK.")
@@ -91,7 +92,7 @@ def check_nessie():
     try:
         import httpx
         r = httpx.get(f"{NESSIE_URL}/accounts", params={"limit": 1},
-                      headers={"Authorization": f"Bearer {key}"}, timeout=10)
+                      headers={"Authorization": f"Bearer {key}"}, timeout=TIMEOUT_S)
         report("Nessie", r.status_code == 200, f"GET /accounts -> HTTP {r.status_code}")
     except Exception as e:
         report("Nessie", False, short_error(e))
