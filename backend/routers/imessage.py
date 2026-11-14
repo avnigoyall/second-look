@@ -192,12 +192,15 @@ def analyze(body: AnalyzeImessageRequest, x_agent_secret: str | None = Header(No
     name = (body.text or "").strip()[:NAME_MAX] or DEFAULT_NAME
     response, record = decide(user, {"name": name, "image_url": image_url}, save=True)
 
+    has_attrs = bool(record.get("attributes"))
+    ask_ownership = has_attrs and response.verdict != "have_this_look"
+
     # Keep the stored verdict small and mark its channel: the photo itself lives on as target_crop.
+    # ask_ownership is stored so a later yes or no can only answer a question that was really asked.
     if response.verdict_id and response.verdict_id != "unsaved":
         verdicts.update_one({"_id": ObjectId(response.verdict_id)},
-                            {"$set": {"item.image_url": None, "channel": "imessage"}})
+                            {"$set": {"item.image_url": None, "channel": "imessage", "ask_ownership": ask_ownership}})
 
-    has_attrs = bool(record.get("attributes"))
     message = verdict_message(response)
     phone = normalize_phone(body.phone)
     record_turn(user, phone, "in", "photo", body.text, verdict_id=response.verdict_id)
@@ -206,7 +209,7 @@ def analyze(body: AnalyzeImessageRequest, x_agent_secret: str | None = Header(No
         "verdict_id": response.verdict_id,
         "verdict": response.verdict,
         "message": message,
-        "ask_ownership": has_attrs and response.verdict != "have_this_look",
+        "ask_ownership": ask_ownership,
     }
 
 
@@ -226,12 +229,15 @@ def own(body: OwnRequest, x_agent_secret: str | None = Header(None)):
 
 
 def _own(user: dict, owns: bool) -> dict:
+    # A yes or no answers only the question just asked: the latest iMessage verdict, if it asked and is
+    # still unanswered. A newer photo replaces an older open question, and a verdict that never asked
+    # (have_this_look, or no attributes) can never be answered, so no item is added by mistake.
     since = datetime.now(timezone.utc) - OWNERSHIP_WINDOW
     doc = verdicts.find_one(
-        {"user_id": user["_id"], "channel": "imessage", "ownership": {"$exists": False}, "created_at": {"$gte": since}},
+        {"user_id": user["_id"], "channel": "imessage", "created_at": {"$gte": since}},
         sort=[("created_at", DESCENDING)],
     )
-    if doc is None:
+    if doc is None or doc.get("ask_ownership") is not True or "ownership" in doc:
         return {"ok": False, "message": "Send me a photo of something you're thinking about buying first."}
 
     verdicts.update_one({"_id": doc["_id"]}, {"$set": {"ownership": "yes" if owns else "no"}})
