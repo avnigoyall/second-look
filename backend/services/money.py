@@ -8,12 +8,12 @@ Stored on the verdict: `transfer {status done|pending|failed|no_price, id, amoun
 relevant, `topup_id` and `error` (scrubbed). Nothing here ever raises to the shopper.
 """
 import logging
-from datetime import datetime, timezone
 
 from pymongo import ReturnDocument
 
 from backend.services import nessie
 from backend.services.nessie import Deadline, NessieError, TopUpPending
+from backend.timeutil import as_utc
 
 log = logging.getLogger("secondlook.money")
 
@@ -112,7 +112,7 @@ def _on_skip(user: dict, verdict: dict, background):
 def retry_skip(verdict_id) -> None:
     """Background step after a pending skip: provision if needed, wait for a top-up, then one more try.
 
-    The retry looks for the exact description in Checking first, so a transfer that landed is never repeated.
+    The retry looks for the verdict id in Checking descriptions first, so a transfer that landed is never repeated.
     """
     verdict = _load_verdict(verdict_id)
     record = (verdict or {}).get("transfer") or {}
@@ -161,16 +161,11 @@ def savings_summary(user: dict) -> dict:
     return local_savings(user)
 
 
-def utc(value: datetime) -> datetime:
-    """MongoDB hands datetimes back without a timezone. They are UTC."""
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
-
-
 def local_savings(user: dict) -> dict:
     from backend.db import verdicts
     docs = verdicts.find({"user_id": user["_id"], "action": "skipped", "item.price": {"$gt": 0}},
-                         {"item.price": 1, "created_at": 1, "transfer": 1}).sort("created_at", -1).limit(20)
-    transfers = [{"amount_cents": round(d["item"]["price"] * 100), "description": nessie.skip_description(d["_id"]),
-                  "at": utc((d.get("transfer") or {}).get("at") or d["created_at"])} for d in docs]
+                         {"item.price": 1, "item.name": 1, "created_at": 1, "transfer": 1}).sort("created_at", -1).limit(20)
+    transfers = [{"amount_cents": round(d["item"]["price"] * 100), "description": nessie.verdict_skip_description(d),
+                  "at": as_utc((d.get("transfer") or {}).get("at") or d["created_at"])} for d in docs]
     return {"checking_cents": None, "savings_cents": round(money_kept(user["_id"]) * 100), "transfers": transfers,
             "source": "local"}
