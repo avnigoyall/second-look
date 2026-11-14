@@ -247,6 +247,8 @@ class SignupTest(Base):
         self.assertEqual(r.status_code, 200)
         self.assertIsNone(r.json()["user"]["imessage_line"])  # assigned after the response
         self.assertEqual(len(fake.requests), 1)  # TestClient runs background tasks before returning
+        # The account email is never sent, so Photon sends the shopper no invite email.
+        self.assertEqual(json.loads(fake.requests[0].content), {"handle": PHONE})
         doc = self.users.docs[0]
         self.assertEqual((doc["photon_assignment_id"], doc["photon_line"], doc["photon_handle"], doc["photon_opt_in"]),
                          ("asn_1", LINE, PHONE, "pending"))

@@ -249,7 +249,8 @@ def assign_user(user_id) -> dict:
     if has_assignment(user) and not user.get("photon_error"):
         return status_for(user)
     try:
-        a = assign_phone(user["phone"], email=user.get("email"))
+        # No email: Photon would send the shopper an invite email. The popup shows the line instead.
+        a = assign_phone(user["phone"])
     except PhotonLineError as e:
         update = {"$set": {"photon_error": str(e)}, "$unset": {"photon_assigning_at": ""}}
     else:
