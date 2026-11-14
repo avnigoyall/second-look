@@ -1,4 +1,6 @@
 """MongoDB connection and indexes."""
+from datetime import timezone
+
 from pymongo import ASCENDING, DESCENDING, MongoClient
 
 from backend.settings import DB_NAME, MONGODB_URI
@@ -7,7 +9,9 @@ from backend.trends import ensure_trend_indexes
 if not MONGODB_URI:
     raise RuntimeError("MONGODB_URI is not set. Add it to .env in the project root.")
 
-client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
+# tz_aware: stored datetimes come back as aware UTC, so the API sends them with an offset and browsers
+# show the viewer's local time (an offset-less ISO string is read as local time).
+client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000, tz_aware=True, tzinfo=timezone.utc)
 db = client[DB_NAME]
 
 users = db["users"]

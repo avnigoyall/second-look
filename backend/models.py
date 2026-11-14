@@ -1,10 +1,10 @@
 """Pydantic request and response models. FastAPI's /docs page is built from these, so they are the API contract."""
-from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.settings import ATTRIBUTES
+from backend.timeutil import UtcDateTime
 from backend.trends import TrendAlternative, TrendFeatures, TrendSource
 
 VerdictType = Literal["have_this_look", "micro_trend", "good_buy"]
@@ -71,7 +71,7 @@ class User(BaseModel):
     email: str
     profile_type: ProfileType
     preference_note: str | None = None
-    created_at: datetime
+    created_at: UtcDateTime
     phone: str | None = Field(None, description="E.164. Links the account to the iMessage agent (imessage/)")
 
 
@@ -84,7 +84,7 @@ class ClosetItem(BaseModel):
     image_data: str | None = None
     attributes: Attributes | None = None
     description: str = ""
-    created_at: datetime
+    created_at: UtcDateTime
 
 
 class TrendBase(BaseModel):
@@ -93,7 +93,7 @@ class TrendBase(BaseModel):
     name: str
     category: str | None = None
     features: TrendFeatures = TrendFeatures()
-    first_seen: datetime | None = None
+    first_seen: UtcDateTime | None = None
     lifespan_weeks_est: float | None = Field(None, description="Set only when lifespan_source_url cites it")
     lifespan_bucket: Literal["short", "medium", "long"] | None = Field(
         None, description="short: up to 16 weeks, medium: up to 52, long: longer. Set only when lifespan_source_url cites it")
@@ -126,7 +126,7 @@ class Verdict(BaseModel):
     expected_wears: int | None = None
     action: Literal["none", "skipped", "bought"]
     feedback: Literal["none", "up", "down"]
-    created_at: datetime
+    created_at: UtcDateTime
     target_crop: str | None = Field(
         None, description="JPEG data URL of only the target item (understand_target_item). Set by Part 5")
 
@@ -311,7 +311,7 @@ class ActionResponse(BaseModel):
 class SavingsTransfer(BaseModel):
     amount_cents: int
     description: str
-    at: datetime
+    at: UtcDateTime
 
 
 class SavingsResponse(BaseModel):

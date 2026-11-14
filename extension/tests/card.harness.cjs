@@ -208,7 +208,7 @@ async function shot(page, name) {
     { tag: "done", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "done", amount_cents: 2577 } } }, expect: "Skipped. $25.77 moved to savings", saved: true },
     { tag: "pending", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "pending", amount_cents: 2577 } } }, expect: PENDING },
     { tag: "failed", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "failed", amount_cents: 2577 } } }, expect: PENDING },
-    { tag: "no-price", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "no_price", amount_cents: null } } }, expect: PENDING },
+    { tag: "no-price", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "no_price", amount_cents: null } } }, expect: "Skipped. No price, so nothing moved" },
     { tag: "done-no-amount", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "done", amount_cents: null } } }, expect: PENDING },
     { tag: "no-transfer", click: "Skip it", action: { data: { ok: true, balances: { checking_cents: null, savings_cents: null, placeholder: true } } }, expect: PENDING },
     { tag: "timeout", click: "Skip it", action: { code: "timeout", error: "Second Look took longer than 15 seconds to answer.", delayMs: 300 }, expect: PENDING },

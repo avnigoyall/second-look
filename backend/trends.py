@@ -10,13 +10,13 @@ trend's sources. Otherwise they are null and lifespan_label carries the evidence
 are set, the bucket must match the weeks (see bucket_for_weeks).
 """
 import re
-from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pymongo.collation import Collation
 
 from backend.settings import ATTRIBUTES
+from backend.timeutil import UtcDateTime
 
 # Case-insensitive comparison for trend names: the unique index and every upsert use it.
 NAME_COLLATION = Collation(locale="en", strength=2)
@@ -82,8 +82,8 @@ class TrendAlternative(BaseModel):
     product_url: str | None = None
     price: float | None = Field(None, ge=0, description="Dollars, from the product page or a cited search result")
     store: str | None = None
-    verified_at: datetime | None = Field(None, description="Last time the product page loaded as a real product "
-                                                           "page. Null when the store blocks the check or for search links")
+    verified_at: UtcDateTime | None = Field(None, description="Last time the product page loaded as a real product "
+                                                              "page. Null when the store blocks the check or for search links")
     link_kind: LinkKind | None = Field(None, description="product or search. Set whenever product_url is set")
 
     @field_validator("product_url")
@@ -110,7 +110,7 @@ class TrendDoc(BaseModel):
     name: str = Field(min_length=1)
     category: str | None = None
     features: TrendFeatures = TrendFeatures()
-    first_seen: datetime | None = None
+    first_seen: UtcDateTime | None = None
     lifespan_weeks_est: float | None = Field(None, gt=0)
     lifespan_bucket: LifespanBucket | None = None
     lifespan_label: str = Field(min_length=1)

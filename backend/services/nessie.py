@@ -7,13 +7,15 @@ Facts from the live API (scripts/nessie_smoke.py, Nov 14):
   already drops, but the payee's balance does not grow yet. `projected()` below counts both sides.
 - A pending deposit does not count as available funds: a top-up must settle before a transfer can use it.
 - There is no idempotency key. A create that timed out may have landed, so callers look for the transfer's
-  description in the account's transactions before they try again.
+  verdict id marker in the account's transactions before they try again.
+- `description` is at most 200 characters on every create (openapi.json, TransferCreateDTO).
 - Errors are problem+json with a stable `type`, e.g. `.../problems/insufficient_funds` (HTTP 422).
 
 The key only ever travels in the Authorization header. Error text is scrubbed before it is logged or stored.
 """
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -35,6 +37,8 @@ TOPUP_CENTS = 150000  # added on top of the shortfall when checking cannot cover
 LOCK_STALE_S = 30  # a provisioning claim older than this belongs to a crashed run and may be taken over
 CUSTOMER_ADDRESS = {"street_number": "1", "street_name": "Nassau St", "city": "Princeton", "state": "NJ",
                     "zip": "08542"}
+DESCRIPTION_MAX = 200  # Nessie's maxLength for every create's description
+ITEM_NAME_MAX = 60  # keeps "Second Look skip: <name> [<id>]" short and readable, well under DESCRIPTION_MAX
 CREDIT_KINDS = {"deposit", "interest_credit", "refund"}  # kinds where the path account (payer_id) receives
 DEAD_STATUSES = {"declined", "cancelled"}
 
@@ -80,8 +84,36 @@ def has_accounts(user: dict) -> bool:
     return bool(user.get("nessie_customer_id") and user.get("nessie_checking_id") and user.get("nessie_savings_id"))
 
 
-def skip_description(verdict_id) -> str:
-    return f"Second Look skip {verdict_id}"
+def description_name(name) -> str:
+    """The item name as it goes into a description: one line, no brackets (they mark the verdict id), short."""
+    text = "".join(ch if ch.isprintable() else " " for ch in str(name or ""))  # control and separator chars
+    text = " ".join(re.sub(r"[\[\]{}<>]", " ", text).split())
+    if len(text) > ITEM_NAME_MAX:
+        text = text[:ITEM_NAME_MAX - 3].rstrip(" ,.-") + "..."
+    return text or "item"
+
+
+def skip_description(verdict_id, item_name=None) -> str:
+    """Readable and still unique: "Second Look skip: Wide-leg denim jeans [<verdict_id>]".
+
+    At most 18 + ITEM_NAME_MAX + 2 + 24 + 2 characters for an ObjectId, far under DESCRIPTION_MAX.
+    """
+    return f"Second Look skip: {description_name(item_name)} [{verdict_id}]"
+
+
+def verdict_skip_description(verdict: dict) -> str:
+    return skip_description(verdict["_id"], (verdict.get("item") or {}).get("name"))
+
+
+def is_skip_for(description, verdict_id) -> bool:
+    """True when this description belongs to this verdict's skip transfer.
+
+    Matches the verdict id marker of the current format and, for transfers made before it, the old
+    "Second Look skip <verdict_id>" text.
+    """
+    text = description or ""
+    return (text.startswith("Second Look skip") and text.endswith(f"[{verdict_id}]")) \
+        or text == f"Second Look skip {verdict_id}"
 
 
 def topup_description(verdict_id) -> str:
@@ -235,10 +267,14 @@ def list_transfers(user: dict, limit: int = 20, timeout: float = CALL_TIMEOUT_S)
             ][:limit]
 
 
-def find_transaction(account_id: str, description: str, timeout: float = CALL_TIMEOUT_S) -> dict | None:
-    """The live (not declined or cancelled) transaction with this exact description, if any."""
+def find_transaction(account_id: str, matches, timeout: float = CALL_TIMEOUT_S) -> dict | None:
+    """The live (not declined or cancelled) transaction whose description matches, if any.
+
+    `matches` is an exact description or a predicate on the description.
+    """
+    test = matches if callable(matches) else (lambda d: d == matches)
     for t in account_transactions(account_id, 100, timeout=timeout):
-        if t.get("description") == description and t.get("status") not in DEAD_STATUSES:
+        if test(t.get("description")) and t.get("status") not in DEAD_STATUSES:
             return t
     return None
 
@@ -265,16 +301,17 @@ def skip_transfer(user: dict, verdict: dict, deadline: Deadline | None = None, c
 
     status is "done" (Nessie accepted the transfer) or "no_price" (nothing to move). Raises NessieTimeout
     (may have landed), TopUpPending (checking was short, a deposit is settling) or NessieError.
-    check_existing looks for an earlier transfer with the same description first, so a retry never repeats one.
+    check_existing looks for an earlier transfer for this verdict id first (new or old description format), so a
+    retry never repeats one.
     """
     deadline = deadline or Deadline(CALL_TIMEOUT_S)
     cents = amount_cents(verdict)
     if cents is None:
         return {"status": "no_price", "id": None, "amount_cents": None, "at": now()}
     checking, savings = user["nessie_checking_id"], user["nessie_savings_id"]
-    description = skip_description(verdict["_id"])
+    description = verdict_skip_description(verdict)
     if check_existing:
-        found = find_transaction(checking, description, timeout=deadline.timeout())
+        found = find_transaction(checking, lambda d: is_skip_for(d, verdict["_id"]), timeout=deadline.timeout())
         if found:
             return {"status": "done", "id": found["id"], "amount_cents": cents, "at": now()}
     account = get_account(checking, timeout=deadline.timeout())

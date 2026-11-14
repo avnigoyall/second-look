@@ -201,7 +201,7 @@ class NessieTest(unittest.TestCase):
         self.assertEqual(transfer, {"status": "done", "amount_cents": 5999})
         self.assertEqual(balances, {"checking_cents": 150000 - 5999, "savings_cents": 5999})
         [tx] = self.fake.of("transfer")
-        self.assertEqual(tx["description"], f"Second Look skip {verdict['_id']}")
+        self.assertEqual(tx["description"], f"Second Look skip: Barrel jeans [{verdict['_id']}]")
         self.assertEqual((tx["payer_id"], tx["payee_id"]), (user["nessie_checking_id"], user["nessie_savings_id"]))
         self.assertEqual(self.verdicts[verdict["_id"]]["transfer"]["id"], tx["id"])
         self.assertEqual(self.background.tasks, [])
@@ -252,6 +252,45 @@ class NessieTest(unittest.TestCase):
         self.fake.sweep()
         self.assertEqual(self.balances(user), {"checking_cents": 1000 + deposit["amount_cents"] - 5000,
                                                "savings_cents": 5000})
+
+    def landed(self, user, verdict, description):
+        """A transfer that reached Nessie earlier, while the verdict still says failed (a retry is due)."""
+        tx = {"id": self.fake.new_id("txn"), "status": "pending", "medium": "balance", "kind": "transfer",
+              "payer_id": user["nessie_checking_id"], "payee_id": user["nessie_savings_id"], "created_at": "t",
+              "settle_at": "t", "updated_at": "t", "amount_cents": 5999, "description": description}
+        self.fake.txs.append(tx)
+        self.verdicts[verdict["_id"]]["transfer"] = {"status": "failed", "id": None, "amount_cents": 5999,
+                                                     "at": nessie.now()}
+        return tx
+
+    def test_retry_recognizes_a_new_format_transfer_without_duplicate(self):
+        user, verdict = self.make()
+        tx = self.landed(user, verdict, nessie.verdict_skip_description(verdict))
+        transfer, _ = money.on_skip(user, verdict, self.background)
+        self.assertEqual(transfer["status"], "done")
+        self.assertEqual(self.fake.of("transfer"), [tx])
+        self.assertEqual(self.verdicts[verdict["_id"]]["transfer"]["id"], tx["id"])
+
+    def test_retry_recognizes_an_old_format_transfer_without_duplicate(self):
+        user, verdict = self.make()
+        tx = self.landed(user, verdict, f"Second Look skip {verdict['_id']}")  # made before the readable format
+        transfer, _ = money.on_skip(user, verdict, self.background)
+        self.assertEqual(transfer["status"], "done")
+        self.assertEqual(self.fake.of("transfer"), [tx])
+        self.assertEqual(self.verdicts[verdict["_id"]]["transfer"]["id"], tx["id"])
+
+    def test_retry_ignores_other_verdicts_and_top_ups(self):
+        user, verdict = self.make()
+        other = ObjectId()
+        self.landed(user, verdict, f"Second Look skip: Barrel jeans [{other}]")
+        self.fake.txs.append({**self.fake.txs[-1], "id": self.fake.new_id("txn"),
+                              "description": f"Second Look skip {other}"})
+        self.fake.txs.append({**self.fake.txs[-1], "id": self.fake.new_id("txn"), "kind": "deposit",
+                              "description": nessie.topup_description(verdict["_id"])})
+        money.on_skip(user, verdict, self.background)
+        self.assertEqual(len(self.fake.of("transfer")), 3)  # a new transfer for this verdict
+        self.assertEqual(self.fake.of("transfer")[-1]["description"],
+                         f"Second Look skip: Barrel jeans [{verdict['_id']}]")
 
     def test_no_price_moves_nothing(self):
         user, verdict = self.make(price=None)
@@ -395,11 +434,49 @@ class EnsureAccountsTest(unittest.TestCase):
         self.assertEqual(len(self.fake.accounts), 2)
 
 
+class DescriptionTest(unittest.TestCase):
+    vid = ObjectId()
+
+    def test_readable_format(self):
+        self.assertEqual(nessie.skip_description(self.vid, "  Wide-leg   denim jeans "),
+                         f"Second Look skip: Wide-leg denim jeans [{self.vid}]")
+
+    def test_long_name_is_shortened_and_keeps_the_marker(self):
+        description = nessie.skip_description(self.vid, "Oversized " * 100)
+        self.assertLessEqual(len(description), nessie.DESCRIPTION_MAX)
+        self.assertLessEqual(len(nessie.description_name("Oversized " * 100)), nessie.ITEM_NAME_MAX)
+        self.assertTrue(description.endswith(f"...[{self.vid}]") or description.endswith(f"... [{self.vid}]"))
+        self.assertTrue(nessie.is_skip_for(description, self.vid))
+
+    def test_odd_names_are_cleaned(self):
+        name = f"Tee\n[{ObjectId()}]\t<b>{{x}}</b>\x00\u2028 \u2764\ufe0f"
+        description = nessie.skip_description(self.vid, name)
+        self.assertEqual(description.count("["), 1)
+        self.assertNotIn("\n", description)
+        self.assertNotIn("<", description)
+        self.assertTrue(all(ch.isprintable() for ch in description))
+        self.assertTrue(nessie.is_skip_for(description, self.vid))
+        self.assertIn("\u2764", description)
+
+    def test_missing_name(self):
+        for name in (None, "", "   ", "[]"):
+            self.assertEqual(nessie.skip_description(self.vid, name), f"Second Look skip: item [{self.vid}]")
+
+    def test_matching(self):
+        other = ObjectId()
+        self.assertTrue(nessie.is_skip_for(f"Second Look skip {self.vid}", self.vid))
+        self.assertTrue(nessie.is_skip_for(nessie.skip_description(self.vid, "Jeans"), self.vid))
+        self.assertTrue(nessie.is_skip_for(nessie.skip_description(str(self.vid), "Jeans"), self.vid))
+        for description in (f"Second Look skip {other}", nessie.skip_description(other, "Jeans"),
+                            nessie.topup_description(self.vid), f"Refund [{self.vid}]", None, ""):
+            self.assertFalse(nessie.is_skip_for(description, self.vid), description)
+
+
 class LocalSavingsTest(unittest.TestCase):
     def test_local_summary_uses_money_kept(self):
         user = {"_id": ObjectId()}
         vid = ObjectId()
-        doc = {"_id": vid, "item": {"price": 19.99}, "created_at": datetime(2026, 11, 14, tzinfo=timezone.utc)}
+        doc = {"_id": vid, "item": {"price": 19.99, "name": "Barrel jeans"}, "created_at": datetime(2026, 11, 14)}
         cursor = mock.MagicMock()
         cursor.sort.return_value.limit.return_value = [doc]
         with mock.patch("backend.db.verdicts") as verdicts:
@@ -409,7 +486,8 @@ class LocalSavingsTest(unittest.TestCase):
         self.assertEqual(out.source, "local")
         self.assertEqual(out.savings_cents, 1999)
         self.assertIsNone(out.checking_cents)
-        self.assertEqual(out.transfers[0].description, f"Second Look skip {vid}")
+        self.assertEqual(out.transfers[0].description, f"Second Look skip: Barrel jeans [{vid}]")
+        self.assertEqual(out.model_dump(mode="json")["transfers"][0]["at"], "2026-11-14T00:00:00Z")
 
 
 if __name__ == "__main__":
