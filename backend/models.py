@@ -220,6 +220,40 @@ class MeResponse(BaseModel):
     user: User
 
 
+class SocialWeeklyCount(BaseModel):
+    week: str
+    count: int = Field(ge=0)
+    corpus_count: int = Field(ge=0)
+    normalized: float = Field(ge=0, le=1)
+    complete: bool | None = None
+    query_coverage: Literal["complete", "partial", "unvisited", "unknown"] | None = None
+    corpus_query_coverage: Literal["complete", "incomplete"] | None = None
+
+
+class SocialExample(BaseModel):
+    uri: str
+    url: str
+    snippet: str = Field(max_length=160)
+
+
+class SocialContext(BaseModel):
+    term: str
+    similarity: float = Field(ge=-1, le=1)
+    first_seen_in_window: str | None = None
+    weekly_counts: list[SocialWeeklyCount] = Field(default_factory=list, max_length=26)
+    peak_week: str | None = None
+    decay_ratio: float | None = None
+    breadth: int = 0
+    concentration: float | None = None
+    momentum: Literal["rising", "peaking", "fading", "steady", "unknown"] = "unknown"
+    confidence: Literal["low", "medium", "high"] = "low"
+    examples: list[SocialExample] = Field(default_factory=list, max_length=2)
+    estimate: Literal[True] = True
+    trends_ui_url: str | None = None
+    query_coverage_complete: bool | None = None
+    coverage_note: str | None = None
+
+
 class AnalyzeResponse(BaseModel):
     status: Literal["ok"]
     verdict_id: str
@@ -231,6 +265,8 @@ class AnalyzeResponse(BaseModel):
     outfits: list[Outfit] = []
     expected_wears: int | None = None
     cost_per_wear: float | None = None
+    social_context: SocialContext | None = Field(
+        None, description="Optional sampled Bluesky estimate. Absent matches and service failures return null")
     # Part 5 additions (all optional, additive only)
     matched_closet_items: list[ClosetItem] = Field(
         [], description="Up to 3 matched closet items with image_data, best first. matched_closet_item is the first")

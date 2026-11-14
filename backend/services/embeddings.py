@@ -36,7 +36,8 @@ def _embed(content) -> list[float]:
         response = _get_client().models.embed_content(model=EMBEDDING_MODEL, contents=content, config=_CONFIG)
     except Exception as e:
         # Never fall back to another model: vectors from different models cannot be compared.
-        log.warning("embedding call failed: %s", str(e)[:300])
+        # Provider errors can include request text and credentials.
+        log.warning("embedding call failed: %s", type(e).__name__)
         raise EmbeddingError(f"{EMBEDDING_MODEL} call failed ({getattr(e, 'code', None) or type(e).__name__})") from e
     values = list(response.embeddings[0].values) if response.embeddings else []
     if len(values) != DIMENSIONS:

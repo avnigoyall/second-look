@@ -1,0 +1,25 @@
+{
+  "description": "Labels are evaluation annotations only. Queries are quoted phrases. Counts are sampled search index results.",
+  "terms": [
+    {"term": "cargo pants", "label": "micro"},
+    {"term": "barrel jeans", "label": "micro"},
+    {"term": "ballet flats", "label": "micro"},
+    {"term": "graphic tee", "label": "unknown"},
+    {"term": "quarter zip", "label": "micro"},
+    {"term": "leg warmers", "label": "micro"},
+    {"term": "bubble skirt", "label": "micro"},
+    {"term": "sambas", "label": "micro"},
+    {"term": "capri pants", "label": "micro"},
+    {"term": "leopard print", "label": "micro"},
+    {"term": "cherry red", "label": "micro"},
+    {"term": "mesh flats", "label": "micro"},
+    {"term": "butter yellow", "label": "micro"},
+    {"term": "baggy jeans", "label": "micro"},
+    {"term": "crochet top", "label": "micro"},
+    {"term": "white t-shirt", "label": "staple"},
+    {"term": "Levi's 501", "label": "staple"},
+    {"term": "plain black tee", "label": "staple"},
+    {"term": "chinos", "label": "staple"},
+    {"term": "oxford shirt", "label": "staple"}
+  ]
+}

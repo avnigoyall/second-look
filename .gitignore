@@ -8,5 +8,6 @@ node_modules/
 .playwright-mcp/
 extension/tests/e2e/shots/
 .trend_runs/
+.social_runs/
 extension/tests/e2e/.tmp/
 .claude/worktrees/
