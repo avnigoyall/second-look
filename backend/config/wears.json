@@ -1,0 +1,21 @@
+{
+  "_note": "Rough placeholder averages of lifetime wears per category. Unverified: no source yet. The card must label them as an estimate.",
+  "verified": false,
+  "default": 30,
+  "per_category": {
+    "tee": 40,
+    "shirt": 30,
+    "sweater": 30,
+    "hoodie": 40,
+    "jacket": 40,
+    "coat": 50,
+    "jeans": 60,
+    "pants": 40,
+    "shorts": 25,
+    "skirt": 20,
+    "dress": 10,
+    "shoes": 60,
+    "bag": 80,
+    "accessory": 40
+  }
+}

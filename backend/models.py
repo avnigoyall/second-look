@@ -13,6 +13,8 @@ ClosetSource = Literal["snap", "auto_add", "ownership_answer", "quick_add",
                        "ingest_photo", "ingest_video", "ingest_text"]
 ClosetStatus = Literal["owned", "incoming"]
 FabricConfidence = Literal["high", "medium", "low"]
+DecidedBy = Literal["code", "claude", "fallback"]
+LookZone = Literal["forced", "gray", "none"]
 
 
 # ---------- shared pieces ----------
@@ -43,6 +45,8 @@ class Item(BaseModel):
     price: float | None = Field(None, ge=0, description="Price in dollars")
     store: str | None = None
     url: str | None = None
+    description: str | None = Field(None, max_length=20000, description="Store description, if the page has one")
+    breadcrumb: str | None = Field(None, max_length=2000, description="Category path, for example 'Men > Pants'")
 
 
 class Alternative(BaseModel):
@@ -196,6 +200,18 @@ class AnalyzeResponse(BaseModel):
     outfits: list[Outfit] = []
     expected_wears: int | None = None
     cost_per_wear: float | None = None
+    # Part 5 additions (all optional, additive only)
+    matched_closet_items: list[ClosetItem] = Field(
+        [], description="Up to 3 matched closet items with image_data, best first. matched_closet_item is the first")
+    decided_by: DecidedBy | None = Field(
+        None, description="code: rules decided (Claude may have written the reason). claude: Claude chose within "
+                          "the allowed set. fallback: Claude failed, code-only verdict with a template reason")
+    closet_small: bool | None = Field(None, description="True while the closet has fewer than 10 items")
+    zone: LookZone | None = Field(
+        None, description="have_this_look zone from the best closet score. null when matching did not run "
+                          "(not apparel, attributes failed, embedding or Atlas error): say nothing about ownership")
+    wears_estimated: bool = Field(False, description="True when expected_wears is a rough category estimate. "
+                                                      "Show it labeled as an estimate")
 
 
 class ReadPageResponse(BaseModel):

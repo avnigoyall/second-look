@@ -1,5 +1,6 @@
 {
   "look_similarity": 0.80,
   "require_color_match": true,
-  "duplicate_similarity": 0.93
+  "duplicate_similarity": 0.93,
+  "gray_margin": 0.04
 }
