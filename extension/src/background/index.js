@@ -128,6 +128,13 @@ async function signup({ email, password, phone }) {
   return { email: user.email, phone: user.phone || null };
 }
 
+// The account's Photon iMessage line: {status, line, phone, message}. Connect may set the phone first.
+async function imessageConnect({ phone }) {
+  const result = await api("/imessage/connect", { method: "POST", body: phone ? { phone } : {} });
+  if (result.phone) await SecondLookState.updateState({ phone: result.phone });
+  return result;
+}
+
 async function analyzeItem({ item }) {
   let timing = null;
   const result = await api("/analyze", {
@@ -253,6 +260,8 @@ const handlers = {
   CHECK_ACTIVE_TAB: checkActiveTab,
   PAGE_KIND: pageKind,
   IMPACT: () => api("/impact"),
+  IMESSAGE_STATUS: () => api("/imessage/status"),
+  IMESSAGE_CONNECT: imessageConnect,
   DIAGNOSE: diagnose,
   ANALYZE_ITEM: analyzeItem,
   READ_PAGE: ({ url, text, image_url }) => api("/read-page", { method: "POST", body: { url, text, image_url } }),

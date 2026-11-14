@@ -73,6 +73,7 @@ class User(BaseModel):
     preference_note: str | None = None
     created_at: UtcDateTime
     phone: str | None = Field(None, description="E.164. Links the account to the iMessage agent (imessage/)")
+    imessage_line: str | None = Field(None, description="E.164 of the Photon iMessage line assigned to this account")
 
 
 class ClosetItem(BaseModel):

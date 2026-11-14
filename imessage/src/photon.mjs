@@ -16,13 +16,16 @@ export function getAgent() {
   return agentPromise;
 }
 
-/** Send a plain-text reply from the agent into a space. */
-export async function reply(spaceId, text) {
-  const agent = await getAgent();
+/**
+ * Send a plain-text reply into a space. `senderId` is the line that received the shopper's message
+ * (replySenderId in route.mjs); without it the reply comes from the PHOTON_AGENT_HANDLE line.
+ */
+export async function reply(spaceId, text, senderId = null) {
+  const from = senderId ?? (await getAgent()).id;
   return photon.projects.sendMessage({
     path: path(),
     headers: { "idempotency-key": randomUUID() },
-    body: { spaceId, senderId: agent.id, content: { type: "text", format: "plain", text } },
+    body: { spaceId, senderId: from, content: { type: "text", format: "plain", text } },
   });
 }
 
