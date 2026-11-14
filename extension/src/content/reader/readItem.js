@@ -1,6 +1,8 @@
 // readItem(): tries tier 1 (JSON-LD), tier 2 (meta tags), then tier 3 (Gemini via the service
-// worker) and returns {name, image_url, price, currency, store, url, source_tier}, or null when
-// no product name can be found. readItemWithDetails() also returns what each tier saw, for Diagnose.
+// worker) and returns {name, image_url, price, currency, store, url, source_tier, price_source},
+// or null when no product name can be found. When a name is found but no price, the DOM price
+// reader runs before Gemini. price_source is jsonld, meta, dom, gemini, or null.
+// readItemWithDetails() also returns what each tier saw, for Diagnose.
 (function (global) {
   "use strict";
 
@@ -56,7 +58,22 @@
       store: global.SecondLookMeta.storeName(),
       url: global.SecondLookMeta.canonicalUrl(),
       source_tier: t1?.name ? 1 : t2?.name ? 2 : null,
+      price_source: t1?.price != null ? "jsonld" : t2?.price != null ? "meta" : null,
     };
+
+    // DOM price: when tier 1 or 2 found a name but no price, read the price off the page
+    // before spending a Gemini call. Without a name, Gemini runs anyway and fills the price.
+    if (item.name && item.price == null) {
+      const dom = global.SecondLookDomPrice.readDomPrice(item.name);
+      details.tiers.dom = dom || { found: false };
+      if (dom) {
+        item.price = dom.price;
+        item.currency = item.currency || dom.currency || null;
+        item.price_source = "dom";
+      }
+    } else {
+      details.tiers.dom = { used: false };
+    }
 
     // Tier 3 runs when the name or image is missing, or only to fill a missing price.
     const needsGemini = !item.name || !item.image_url || item.price == null;
@@ -70,13 +87,18 @@
           item.source_tier = 3;
         }
         item.image_url = item.image_url || g.image_url || null;
-        if (item.price == null && g.price != null) item.price = global.SecondLookPrice.parsePrice(g.price);
+        if (item.price == null && g.price != null) {
+          item.price = global.SecondLookPrice.parsePrice(g.price);
+          if (item.price != null) item.price_source = "gemini";
+        }
       }
     } else {
       details.tiers.gemini = { used: false };
     }
 
     details.item = item.name ? item : null;
+    details.price_source = item.price_source;
+    console.log(LOG, "price source:", item.price_source || "none", item.price != null ? item.price : "");
     console.log(LOG, "readItem", details);
     return details;
   }

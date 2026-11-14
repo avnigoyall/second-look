@@ -70,6 +70,8 @@ const RECORDER = `(() => {
     const page = await ctx.newPage();
     page.on("pageerror", (e) => errors.push(`${file}: ${e.message}`));
     page.on("console", (m) => { if (m.type() === "error" && !/favicon|Failed to load resource/.test(m.text())) errors.push(`${file}: ${m.text()}`); });
+    page.slLogs = [];
+    page.on("console", (m) => { if (m.text().includes("[SecondLook]")) page.slLogs.push(m.text()); });
     await page.goto(`${FIX}/${file}`);
     await page.evaluate(RECORDER);
     return page;
@@ -241,6 +243,77 @@ const RECORDER = `(() => {
     const clip = await pop2.evaluate(() => window.__copied);
     (clip === text ? pass : fail)("5. Copy JSON copies the block", `button: ${copyLabel} | clipboard: ${String(clip).slice(0, 60).replace(/\n/g, " ")} | len ${String(clip).length} vs ${text.length}`);
     await pop2.screenshot({ path: `${OUT}/5-diagnose.png`, fullPage: true });
+  }
+
+  // ---- 6. store-scan fixes ----
+  // Clicks a control and confirms Second Look did nothing (no card, no new session entry).
+  async function expectNoTrigger(page, selector, name) {
+    const before = (await storage()).length;
+    await page.evaluate(() => { window.__states = []; });
+    await page.click(selector);
+    await sleep(1500);
+    const states = await page.evaluate(() => window.__states);
+    (states.length === 0 && (await storage()).length === before ? pass : fail)(name, JSON.stringify(states));
+  }
+  async function diagnoseOn(page) {
+    await page.bringToFront();
+    return sw.evaluate(() => diagnose());
+  }
+
+  // 6a. Zara-style: bare "ADD" with data-qa-action, DOM sale price, wishlist and promo "ADD" ignored.
+  {
+    const page = await openStore("zara-style.html");
+    const rep = await diagnoseOn(page);
+    const adds = rep.add_to_cart_candidates;
+    (adds.length === 1 && adds[0] === "ADD" ? pass : fail)("6a. Zara-style: only the data-qa-action ADD button detected", JSON.stringify(adds));
+    (rep.price_source === "dom" && rep.item?.price === 39.9 && rep.tiers.gemini?.used === false ? pass : fail)(
+      "6a. Zara-style: DOM sale price used, Gemini not called", `price_source=${rep.price_source} price=${rep.item?.price} dom=${JSON.stringify(rep.tiers.dom)}`);
+    (rep.item?.name === "LINEN BLEND BLAZER" ? pass : fail)("6a. Zara-style: name from og:title, store suffix stripped", rep.item?.name);
+    await expectNoTrigger(page, "#wish", "6a. wishlist button (data-testid add-to-bag-wishlist) does not trigger");
+    await expectNoTrigger(page, "#promo", "6a. bare ADD without a data attribute does not trigger");
+    await page.click('button[data-qa-action="add-to-cart"]');
+    await card(page).locator(".badge").waitFor({ timeout: 15000 });
+    const meta = await card(page).locator(".item-meta").textContent();
+    (meta.includes("$39.90") ? pass : fail)("6a. Zara-style ADD click shows verdict with DOM price", meta);
+    const logs = page.slLogs.join(" | ");
+    (/price source: dom/.test(logs) ? pass : fail)("6a. console logs price source", logs.match(/price source: \w+[^|]*/)?.[0]);
+    await sleep(400); await page.screenshot({ path: `${OUT}/6a-zara-style.png` });
+  }
+
+  // 6b. Spanish (Hollister-style): JSON-LD without price, data-price in the DOM, Spanish buttons.
+  {
+    const page = await openStore("spanish.html");
+    await expectNoTrigger(page, "#wish-es", "6b. Spanish wishlist button (lista) does not trigger");
+    await page.click("#add-es");
+    await card(page).locator(".badge").waitFor({ timeout: 15000 });
+    const name = await card(page).locator(".item-name").textContent();
+    const meta = await card(page).locator(".item-meta").textContent();
+    (name === "Camisa de lino de manga corta" && meta.includes("$49.95") ? pass : fail)("6b. 'Añadir a la bolsa' triggers, price from data-price", `${name} | ${meta}`);
+    const rep = await diagnoseOn(page);
+    (rep.tier_used === 1 && rep.price_source === "dom" ? pass : fail)("6b. Diagnose: tier 1 name, price_source dom", `tier ${rep.tier_used}, ${rep.price_source}, ${JSON.stringify(rep.tiers.dom)}`);
+  }
+
+  // 6c. Pacsun-style: recommendation tiles with their own Add to Bag buttons.
+  {
+    const page = await openStore("pacsun-style.html");
+    const rep = await diagnoseOn(page);
+    const ignored = rep.add_to_cart_candidates.filter((c) => c.includes("ignored")).length;
+    (rep.add_to_cart_candidates.length === 4 && ignored === 2 ? pass : fail)("6c. Diagnose marks the 2 other-product tiles as ignored", JSON.stringify(rep.add_to_cart_candidates));
+    (rep.item?.price === 24.95 && rep.price_source === "dom" ? pass : fail)("6c. DOM price range takes the lower value", `${rep.item?.price} via ${JSON.stringify(rep.tiers.dom)}`);
+    await expectNoTrigger(page, "#add-tile-1", "6c. Add to Bag in a tile for another product does not trigger");
+    (page.slLogs.some((l) => /tile for another product/.test(l)) ? pass : fail)("6c. ignored tile click is logged");
+    await page.click("#add-main");
+    await card(page).locator(".badge").waitFor({ timeout: 15000 });
+    const name = await card(page).locator(".item-name").textContent();
+    (name === "Sunset Graphic Tee" ? pass : fail)("6c. main Add to Bag triggers for the page's product", name);
+    await sleep(400); await page.screenshot({ path: `${OUT}/6c-pacsun-style.png` });
+  }
+  // 6d. A tile that links to the current page still triggers (fresh page, so no debounce).
+  {
+    const page = await openStore("pacsun-style.html");
+    await page.click("#add-tile-self");
+    const shown = await card(page).locator(".badge").waitFor({ timeout: 15000 }).then(() => true, () => false);
+    (shown ? pass : fail)("6d. Add to Bag in a tile that links to the current page triggers");
   }
 
   // ---- console errors ----

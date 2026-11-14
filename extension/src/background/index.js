@@ -12,6 +12,7 @@ const READER_FILES = [
   "src/content/reader/price.js",
   "src/content/reader/jsonld.js",
   "src/content/reader/meta.js",
+  "src/content/reader/domPrice.js",
   "src/content/reader/readItem.js",
   "src/content/matchers.js",
 ];

@@ -93,12 +93,21 @@ Record real store results in `docs/store-test-results.md`.
 
 1. `jsonld.js` reads schema.org `Product` or `ProductGroup` data from JSON-LD scripts, including `@graph` containers, offer arrays, and `AggregateOffer`.
 2. `meta.js` reads Open Graph and product meta tags (`og:title`, `og:image`, `product:price:amount`) and microdata (`itemprop`). It strips a trailing store name from titles ("Linen Shirt | Zara" becomes "Linen Shirt").
-3. If the name or image is still missing, or only the price is missing, `readItem.js` sends the trimmed visible page text (up to 8000 characters) and an image URL to `POST /read-page`, which asks Gemini for `{name, price, image_url}`.
-4. If no name is found, the card shows paste-a-link.
+3. If tier 1 or 2 found a name but no price, `domPrice.js` reads the price off the page before any Gemini call: `itemprop="price"`, then `[data-price]`, then short currency text inside the main product container (the element that holds both the `<h1>` and the add-to-cart button). It skips struck-through or "was / original / old" prices, so a sale shows its current price. A range takes the lower value.
+4. If the name or image is still missing, or the price is still missing, `readItem.js` sends the trimmed visible page text (up to 8000 characters) and an image URL to `POST /read-page`, which asks Gemini for `{name, price, image_url}`.
+5. If no name is found, the card shows paste-a-link.
+
+Every read logs `[SecondLook] price source: jsonld | meta | dom | gemini | none` in the page console, and Diagnose reports `price_source` plus what the DOM tier found (`tiers.dom.via`).
 
 `price.js` parses prices with currency symbols or codes, thousands separators, decimal commas (`€39,90`), and ranges or "was / now" text (the lowest number wins). If no price is found, the card asks for it before checking.
 
-**Triggering.** `trigger.js` attaches one capture-phase click listener to the document, so it keeps working after single-page-app navigation and runs before the store's own handler without blocking it. It matches buttons and links whose text, `aria-label`, `title`, `value`, or `data-testid` match `add (to) (shopping) bag|cart|basket`. One check per URL every 3 seconds. Nothing runs on page load.
+**Triggering.** `trigger.js` attaches one capture-phase click listener to the document, so it keeps working after single-page-app navigation and runs before the store's own handler without blocking it. One check per URL every 3 seconds. Nothing runs on page load. `matchers.js` decides what counts as add-to-cart:
+
+- Text, `aria-label`, `title`, or `value` matching `add (to) (shopping) bag|cart|basket`, `añadir|agregar a (la) bolsa|cesta|carrito`, `ajouter au panier`, or `in den warenkorb`.
+- `data-qa-action`, `data-test`, `data-qa`, `data-testid`, `id`, or a class token matching `add-to-cart|bag|basket` (hyphen, underscore, space, or nothing between words).
+- A button whose text is exactly "ADD" (Zara) counts only when a `data-*` attribute also says add-to-cart.
+- Never a wishlist or list button: anything mentioning wishlist, favorite, save, or "lista" is excluded, even if another attribute says add-to-cart.
+- Never an add button inside a product tile for a different product (recommendations). A tile is the nearest small container with a linked image. If the tile links to the current page, or the button has no tile, it triggers. A container that holds the page's `<h1>` is the main product, not a tile.
 
 **Removal.** `removal.js` listens for clicks on controls whose text, `aria-label`, or `title` contain remove, delete, or trash. It saves the text of the control's ancestors right away (before the store deletes the row), then finds the closest ancestor whose words cover at least 60% of a session item's name.
 
@@ -156,3 +165,10 @@ Set `CHROME_PATH` to use a specific Chromium build. Screenshots go to `extension
 - **The Part 0 "Send test item" button** was removed. "Check this item" replaces it.
 - **Store name** comes from `og:site_name`, or the hostname without `www.`.
 - **SPA staleness:** some single-page stores do not update JSON-LD or meta tags on client-side navigation. If Diagnose shows the previous product, reload the page.
+
+### Part 1 store fixes
+
+- **DOM price** runs only when tier 1 or 2 found a name. On pages with no name, Gemini runs anyway and fills the price.
+- **`[data-price]`** is used as-is only when it reads like a price ("49.95" or "$49.95"). A whole number like "4995" might be cents, so the element's visible text is used instead.
+- **Currency text** must be short (40 characters or less) and mostly price: after removing the numbers and currency, at most 15 letters may remain. "Sale price $39.90" passes, "Free shipping over $50" does not.
+- **"save"** is excluded only as a whole word, so a class like `saved-items` is not affected but a button labelled "Save to wishlist" is.
