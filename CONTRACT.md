@@ -54,9 +54,15 @@ response ItemAttributesResponse {
   "description": "<= 25 words",
   "is_apparel": "bool|null",
   "status": "ok | attributes_failed",
-  "attribute_string": "string, empty when attributes_failed"
+  "attribute_string": "string, empty when attributes_failed",
+  "target_box_2d": "[ymin, xmin, ymax, xmax] 0 to 1000 around the target item | null (optional, Fix A)",
+  "other_garments_visible": "bool | null (optional, Fix A)",
+  "category_check": "agreed | fixed_by_crop | fixed_by_text | forced_from_name | no_name_category | null (optional, Fix A)",
+  "target_crop": "JPEG data URL of the target item, 600 px longest side | null (optional, Fix A)"
 }
 ```
+- Target item only `[BUILT]` (Fix A): the prompt labels only the named item and ignores other clothes in an outfit shot. Code maps name and breadcrumb to a category (`CATEGORY_KEYWORDS`, built to cover every category in attributes.json, last garment noun wins, so "denim jacket" is jacket). On disagreement: one retry on the crop of `target_box_2d` (text only when there is no box), then the name category is forced, image-only attributes are nulled and the conflict is logged. Behavior change: when forced, the category can differ from Gemini's and the description is null.
+- Entry points for Part 5: `understand_target_item()` (fetch, label, crop) and `verdict_doc_fields()` returning `{attributes, target_crop}` for the verdict doc. `understand_item` is now an alias, so Buy anyway auto-add also gets the name check.
 - Allowed values: `backend/config/attributes.json` (`GET /config/attributes`). Do not copy enums elsewhere.
   - category: tee, shirt, sweater, hoodie, jacket, coat, jeans, pants, shorts, skirt, dress, shoes, bag, accessory
   - color_family: black, white, gray, beige, brown, red, orange, yellow, green, blue, purple, pink, multi
@@ -136,7 +142,9 @@ Stored document (`TrendDoc`, validated for both seed file and agent output)
   "lifespan_source_url": "must be one of sources[].url when any lifespan field is set, else null",
   "sources": [{ "title": "string", "url": "http(s) url" }],      // at least 1
   "example_images": ["url or data url"],
-  "alternatives": [{ "type": "...", "why_it_lasts": "...", "where_to_look": "store kind, not a link", "url": "only if in sources" }],
+  "alternatives": [{ "type": "...", "why_it_lasts": "...", "where_to_look": "store kind, not a link", "url": "only if in sources",
+                     "product_name": "string|null", "product_url": "http(s)|null", "price": "number >= 0|null",
+                     "store": "string|null", "verified_at": "datetime|null", "link_kind": "product|search|null" }],   // product fields: Fix B, optional
   "origin": "seed | agent",
   "search_suggestions_html": "agent only. Leftover from the dropped Gemini grounding path, unused"
 }
@@ -145,7 +153,9 @@ Stored document (`TrendDoc`, validated for both seed file and agent output)
 - Guards in code: no category means discard, sources older than 12 months dropped, lifespan nulled when sources disagree, dedupe on category plus feature signature (not name alone), existing names passed into the structuring call.
 - Lifespan numbers are shown to users only with the cited source.
 - No human review of agent trends. Guards are the safety net.
-- Trend alternatives are text suggestions. The verdict `Alternative` shape below is different (section 7), so Part 5 maps one to the other.
+- Alternative links `[BUILT]` (Fix B): found with Claude web search at seed time (`seed_trends.py`, and step (c) of the trend agent), never at verdict time, from 14 basics retailers. A `product_url` must be a URL that appeared in the search results (checked in code; hand-written seed URLs are trusted but re-checked by `verify_alternative_links.py`). HTTP check: 200, same domain after redirects, no redirect to a home, search or error page. 403 and 429 keep the link with `verified_at` null. No surviving link means a store search URL with `link_kind: "search"` (stores whose search page answers: Gap, Old Navy, Banana Republic, L.L.Bean, Quince, Abercrombie, Target; not Uniqlo, which returns 403).
+- `scripts/verify_alternative_links.py` re-checks every stored link, read-only by default. Run it before the demo.
+- Part 5 maps trend alternatives to the verdict `Alternative` with `backend/alternatives.py: alternatives_for_trend(trend)`.
 
 ## 7. Verdicts (Part 5)
 
@@ -157,11 +167,13 @@ Response (`AnalyzeResponse`, `[BUILT]`, the extension depends on it):
 { "status": "ok", "verdict_id": "string",
   "verdict": "have_this_look | micro_trend | good_buy", "reason": "string",
   "matched_closet_item": "ClosetItem|null", "matched_trend": "Trend|null",
-  "alternatives": [{ "name": "string", "url": "string|null", "price": 48.0, "reason": "string|null" }],
+  "alternatives": [{ "name": "string", "url": "string (required, non-empty, Fix B)", "price": 48.0, "reason": "string|null",
+                     "store": "string|null", "link_kind": "product | search (default product)" }],
   "outfits": [{ "name": "string", "closet_item_ids": [] }],
   "expected_wears": "int|null", "cost_per_wear": "float|null" }
 ```
-Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_item_id, matched_trend_id, alternatives, expected_wears, action none|skipped|bought, feedback none|up|down, created_at`.
+Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_item_id, matched_trend_id, alternatives, expected_wears, action none|skipped|bought, feedback none|up|down, created_at`, plus optional `target_crop` (Fix A, not returned by `/dashboard`).
+The stub's micro_trend alternatives now come from `alternatives_for_trend(matched_trend)`. Old verdict docs with a null alternative url get a store search link when `/dashboard` reads them.
 
 ### Part 5 rules `[DECIDED]` (V1, V5, V8 and hybrid authority agreed) and `[PROPOSED]` (the rest)
 - Priority: `have_this_look` > `micro_trend` > `good_buy`. One verdict per item.
@@ -201,7 +213,8 @@ Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results on the integration merge: extension E2E 54/54, trends unittest 22/22, price parser 23 checks, backend endpoints `/health`, `/attributes`, `/trends`, `/closet` return 200.
+- Last known results on the Fix A + Fix B merge: extension E2E 58/58, unittest 69/69 (trends 22, target item 25, alternative links 22), price parser 23 checks, live `/attributes` on the Pacsun outfit shot returns shirt with a box and crop.
+- Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_main_ab@secondlook.test`.
 - Before any merge to main: all suites pass, then a smoke test of the chain `/attributes`, then embed, then `find_matches`, then trends lookup, then `/analyze`.
 - Tag before big merges: `git tag pre-integration main`.
 - `python scripts/check_keys.py` verifies MongoDB, Claude, Claude web search (about $0.01), Gemini and Nessie.
@@ -225,6 +238,10 @@ Stored verdict doc: `user_id, item, attributes, verdict, reason, matched_closet_
 | 7 | `/analyze` real | `/analyze` is still a stub | Noted as `[STUB]` |
 | 9 | `/action` `buy anyway` naming | Values are `skipped` and `bought`. Response has placeholder `balances` | Contract |
 | 11 | Per-agent DB name | `DB_NAME` hardcoded. Use test users | Contract |
+| 3 | `/attributes` response ends at `attribute_string` | Fix A adds optional `target_box_2d`, `other_garments_visible`, `category_check`, `target_crop`. Name check can force the category | Contract (additive) |
+| 6 | Trend alternatives are text only | Fix B adds optional `product_name, product_url, price, store, verified_at, link_kind` | Contract (additive) |
+| 7 | `Alternative.url` is `string|null` | Fix B makes it required and non-empty, adds `store` and `link_kind`. This tightens an existing response field (needs Hiresh's sign-off before push) | Contract |
+| 7 | Verdict doc has no crop | Optional `target_crop` on stored verdicts (Fix A) | Contract (additive) |
 
 ## 13. Open items
 
