@@ -206,12 +206,45 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 - Claude failure: section 7 fallback.
 - Atlas failure in `find_matches`: no match, and the card says nothing about closet ownership.
 
-## 9. Actions, money, dashboard `[BUILT]` (placeholders noted)
+## 9. Actions, money, dashboard, Nessie (Part 6) `[BUILT]`
 
-- `POST /action` takes `{verdict_id, action: skipped|bought}` and returns `{ok, balances}`. Balances are a placeholder (`placeholder: true`, Nessie not wired).
-- `GET /dashboard` returns `{money_kept, waste_avoided, verdicts (last 50), cost_per_wear}`. `money_kept` is the sum of `item.price` over verdicts with `action == skipped`. `waste_avoided` and `cost_per_wear` are null for now.
+### `POST /action`
+- Takes `{verdict_id, action: skipped|bought}`. Returns `{ok, balances: {checking_cents, savings_cents, placeholder}, transfer: {status: done|pending|failed|no_price, amount_cents} | null}` (transfer is additive, Part 6).
+- The action is saved first (existing behavior). `bought` is unchanged: no Nessie call, placeholder balances, Buy anyway auto-add (Part 3). The store cart is never touched.
+- `skipped` by a Nessie user: claims `verdict.transfer` atomically (a double click never moves money twice), then moves `round(price * 100)` cents from Checking to Savings with description `Second Look skip <verdict_id>`, all inside a 3 s budget. `done` means Nessie accepted the transfer (Nessie settles it about a minute later).
+- Timeout or error: `pending`, then one background retry that first searches Checking for the exact description, so a transfer that landed is never repeated. Second failure: `failed`; a later Skip click retries with the same check. Never raises to the shopper.
+- Checking below the amount: deposit the shortfall plus 150000 cents (`Second Look top-up <verdict_id>`, never repeated), answer `pending`, and transfer in the background once the deposit settles (up to 120 s). Measured: done after about 50 s.
+- No price: `transfer.status: "no_price"`, no Nessie call.
+- Balances are real (`placeholder: false`) only for skipped by Nessie users, as projected cents (`available_cents` plus pending incoming credits), so Savings moves right away. Otherwise null with `placeholder: true` (local users, bought, Nessie unconfigured, down or out of time).
+- Measured live (demo user, $49.90 skip): 1.3 s from click to "Skipped. $49.90 moved to savings". Checking 150000 to 145010, Savings 0 to 4990.
+
+### Who uses Nessie
+- Only users with `nessie_enabled: true`, set by `python scripts/setup_nessie_demo.py [--email ...]` (idempotent). Everyone else, including the throwaway E2E users, makes zero Nessie calls and uses the local path.
+- User doc fields: `nessie_enabled`, `nessie_customer_id`, `nessie_checking_id`, `nessie_savings_id`, transient `nessie_lock` (race-safe setup: Mongo claim plus process lock; existing accounts found by nickname so a crashed setup resumes). Accounts: "Second Look Checking" 150000 cents, "Second Look Savings" 0.
+- Provisioning never runs on the click: an enabled user without accounts gets `pending` and setup runs in the background.
+- Verdict doc: `transfer {status, id (txn id|null), amount_cents, at}`, optional `topup_id`, `error` (key scrubbed).
+- Demo user is set up: customer, Checking and Savings exist (Nov 14).
+
+### `GET /savings`
+- Returns `{checking_cents: int|null, savings_cents: int, transfers: [{amount_cents, description, at}], source: "nessie" | "local"}`.
+- `nessie`: transfers into Savings, newest first, at most 20. `local` (not enabled, or Nessie failed): `checking_cents` null, `savings_cents = round(money_kept * 100)`, transfers built from skipped priced verdicts.
+
+### Nessie v2 API as observed (`scripts/nessie_smoke.py`, Nov 14)
+- Base `https://v2-prod-api.nessieisreal.com`, `Authorization: Bearer NESSIE_API_KEY`. 3 s timeout per call, 10 s for setup. The key is only ever sent in that header; never logged, stored, returned or sent to the extension.
+- All amounts are integer cents.
+- `POST /customers` `{first_name, last_name, address: {street_number, street_name, city, state (2 letters), zip (5 digits)}}` returns `{id: "cust_...", ...}`.
+- `POST /customers/{id}/accounts` `{type: "Checking" | "Savings", nickname (max 40), balance_cents}`. Account: `{id: "acct_...", customer_id, type, nickname, balance_cents, pending_debits_cents, available_cents, account_number, rewards, created_at, updated_at}`.
+- `POST /accounts/{id}/deposits` `{amount_cents, description?, medium?}`. `POST /accounts/{id}/transfers` `{payee_id, amount_cents, description?}`.
+- Transaction: `{id: "txn_...", kind, status: "pending", medium, amount_cents, description, payer_id, payee_id (transfers), settle_at, created_at, updated_at}`. `GET /accounts/{id}/transactions?limit=N` returns `{items: [...]}`, newest first, no cursor.
+- Everything starts `pending`. `POST /transactions/{id}/settle` moves `settle_at` to now; the hosted sweep moves money 30 to 60 s later. A pending deposit cannot be spent yet (transfer gets 422 `insufficient_funds`). Errors are problem+json. No idempotency key, so a timed-out create may have landed.
+
+### Dashboard
+- `GET /dashboard` returns `{money_kept, waste_avoided, verdicts (last 50), cost_per_wear}`. `money_kept` is still the local sum of `item.price` over verdicts with `action == skipped` (now in `backend/services/money.py`). `waste_avoided` and `cost_per_wear` are null for now.
 - `GET /cart-summary` is a placeholder (all zero, `placeholder: true`). `GET /dashboard-ui` serves the page.
-- Only Skip it counts toward money kept.
+- Only Skip it counts toward money kept. Known gaps: money_kept includes skips from before Part 6 (no transfer), so it can differ from Nessie Savings; Skip then Buy anyway does not reverse the transfer; the dashboard page does not show Nessie balances yet; verdict times show UTC as if local (5 hours off in EST).
+
+### Card after an action (Part 6)
+- Skip it with `transfer.status == "done"` and an amount: "Skipped. $X moved to savings" with a check. Anything else (pending, failed, no_price, no transfer field, timeout): "Skipped. Savings update pending". On a timeout the buttons stay disabled, since the skip may have landed. Buy anyway: unchanged ("Marked as bought").
 
 ## 10. Feedback (Part 7) `[PROPOSED]`
 
@@ -221,8 +254,8 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 60/60 twice after the Photon merge, unittest 118/118, with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
-- Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@secondlook.test`, plus throwaway `e2e<timestamp>@example.com` users.
+- Last known results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 61/61 after the Part 6 merge (60/60 twice after the Photon merge), unittest 133/133, card harness 65/65, with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
+- Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@`, `test_nessie@` (Nessie enabled), `test_nessie_local@secondlook.test`, plus throwaway `e2e<timestamp>@example.com` users.
 - E2E has a SKIP result for checks that need data the shared DB does not have yet. A SKIP is not a pass.
 - Before any merge to main: all suites pass, then a smoke test of the chain `/attributes`, then embed, then `find_matches`, then trends lookup, then `/analyze`.
 - Tag before big merges: `git tag pre-integration main`.
@@ -261,6 +294,10 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 11 | E2E 2a and 9 assume the stub returns micro_trend | Checks run on real micro_trend cards, else SKIP; non-micro_trend cards must show no alternatives | Contract |
 | 14 | No iMessage channel | Avni's Photon additions (`/imessage/*`, `users.phone`, verdict `channel` and `ownership`, data URL images) merged | Contract |
 | 1 | Every Gemini call retries busy replies | `/read-page` did not retry 429 or 503, which made E2E step 5 flaky. Now retries after 2 s and 4 s | Code |
+| 9 | `/action` returns `{ok, balances}` with placeholder balances | Part 6: real projected balances for Nessie users, optional `transfer {status, amount_cents}`, `verdict.transfer` stored | Contract (additive) |
+| 9 | No savings endpoint | `GET /savings` with `source: nessie | local` | Contract (additive) |
+| 9 | Nessie for every user | Opt-in per user (`nessie_enabled`, set by `setup_nessie_demo.py`), so E2E users never create Nessie objects | Contract (design decision) |
+| 9 | Nessie shapes unknown | Recorded from the live smoke test: integer cents, pending then settled by a sweep, no idempotency key | Contract |
 
 ## 13. Open items
 
