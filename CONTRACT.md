@@ -25,6 +25,8 @@ Change rules
 - Models: Gemini for attributes, text structuring and embeddings (`gemini-embedding-2`, 768 dims). Claude for the trend agent (Claude web search, tool type `web_search_20260318`), the Part 5 verdict call, and the final price tier (`/read-price`).
 - Gemini 503s are frequent. Every Gemini call retries up to 4 attempts (2, 4, 8 s waits) and every caller has a fallback (section 8).
 - Demo login: `demo@secondlook.test`. Auth is JWT (`/auth/signup`, `/auth/login`, `/auth/me`).
+- Times: Mongo is opened with `tz_aware=True` (UTC), and every API datetime is serialized with a UTC offset ("Z") through `backend/timeutil.py`, so clients show local time.
+- Timing: every response has `X-Server-Ms`; `/analyze` adds `Server-Timing` with stage times. The backend warms the Claude verdict and price tools, the Gemini clients and Mongo in the background at startup (`backend/warmup.py`, two small Haiku calls; `SECONDLOOK_WARMUP=0` turns it off).
 
 ## 2. Capture (Part 1) `[BUILT]`
 
@@ -38,7 +40,7 @@ Item { "name": "string", "image_url": "string|null", "price": 19.99, "store": "s
 - `POST /read-page` takes `{url, text (max 50000, first 8000 used), image_url?}` and returns `{name?, price?, image_url?}`. Used when the DOM price tier fails.
 - `POST /read-price` (final price tier, Claude) takes `{url (max 4000), name?: string (max 300), windows: [string]}` (1 to 24 windows, 2000 chars each, 8000 total, at least one not blank, else 422) and returns `{price: number|null, price_text: string|null}`. It never answers 5xx: any Claude failure gives nulls.
 - Price tiers in order: JSON-LD, meta, DOM price, `/read-page` (Gemini, first 8000 chars), then `/read-price` (Claude) only when a name exists and price is still null. Price sources: `jsonld | meta | dom | gemini | claude`.
-- Claude tier rules: the extension sends windows of the full visible text: the add-to-cart area (largest container under 1500 chars) plus 120 chars around every amount (`$`, `€`, `£`, or `USD`, `EUR`, `GBP`, `CAD` after), merged, capped at 20 windows and 6000 chars, never cutting an amount. Claude returns `price_text` through a strict forced tool. The backend accepts it only if it appears verbatim in the windows (not inside a longer number) and parses with the same rules as `price.js`. Timeouts: Claude 4 s (hard cutoff 4.2 s), extension wait 5 s, then the card asks for the price as before. Diagnose shows `tiers.claude`.
+- Claude tier rules: the extension sends windows of the full visible text: the add-to-cart area (largest container under 1500 chars) plus 120 chars around every amount (`$`, `€`, `£`, or `USD`, `EUR`, `GBP`, `CAD` after), merged, capped at 20 windows and 6000 chars, never cutting an amount. Claude returns `price_text` through a strict forced tool. The backend accepts it only if it appears verbatim in the windows (not inside a longer number) and parses with the same rules as `price.js`. Timeouts: Claude 4 s (hard cutoff 4.2 s), extension wait 5 s, then the card asks for the price as before. Diagnose shows `tiers.claude`. When the name is known and only the price is missing, `/read-page` and `/read-price` run at the same time; Gemini's price wins, Claude's is used when Gemini finds none or has not answered within 4 s. Each check logs one `[SecondLook] timing ...` line.
 
 Rules that must stay true
 - Price is the displayed non-member price for the selected variant. H&M ProductGroup pages resolve the variant by URL code, sku or color, never the first variant.
@@ -80,7 +82,7 @@ response ItemAttributesResponse {
 ## 4. Embeddings `[BUILT]`
 
 - `embed_text(text)` and `embed_image(jpeg_bytes)` in `backend/services/embeddings.py`. 768 dims, normalized. `embed_many` runs one call per text (8 in parallel). Never put several texts into one call, which merges them into one vector.
-- Closet text embeddings must come from `attribute_string`. After changing that code, run `python scripts/reembed_closet.py` (supports `--dry-run`, writes nothing if any call fails).
+- Closet text embeddings must come from `attribute_string`. After changing that code, run `python scripts/reembed_closet.py` (supports `--dry-run`, writes nothing if any call fails). It also sets `has_description`. Demo closet re-embedded Nov 14.
 
 ## 5. Closet (Part 3) `[BUILT]`
 
@@ -123,10 +125,10 @@ Ingest pipeline: ffmpeg frames at about 1 fps (cap about 40), Gemini batches of 
 Buy anyway: `POST /action` with `bought` triggers a background auto-add (`status incoming`, `source auto_add`) after the response, unless `settings.auto_add_purchases` is false. The `/action` response does not change.
 
 Matching (`backend/services/closet.py`)
-- `find_matches(user_id, attrs, k=5)` returns `[{score, id, name, attributes, status}]`, best first. `score` is plain cosine. Atlas reports `(1 + cos) / 2`, converted by `atlas_to_cosine`. Text embedding only, filtered to the same user and category. It never returns image_data or embeddings.
+- `find_matches(user_id, attrs, k=5)` returns `[{score, id, name, attributes, status}]`, best first. Hand-added items (no description: quick add, ownership answer, iMessage "yes") store `has_description: false` and are scored against the shopped item's attributes-only text; items with a description use the full text. Two embeddings and two vector searches run in parallel and merge by score (no added latency, about 250 ms). Measured: identical attributes 1.0, one differing attribute 0.80 to 0.87, two differing 0.50 to 0.65. `score` is plain cosine. Atlas reports `(1 + cos) / 2`, converted by `atlas_to_cosine`. Text embedding only, filtered to the same user and category. It never returns image_data or embeddings.
 - `is_look_match(match, attrs)` applies `config/thresholds.json` and the color check. Color is decided from `color_family` in code, because text embeddings barely separate colors (blue vs black jeans scored 0.7996).
 - `config/thresholds.json`: `{"look_similarity": 0.80, "require_color_match": true, "duplicate_similarity": 0.93}`. `duplicate_similarity` is untuned (a re-photographed tee scored 0.8585).
-- Atlas index `closet_vector`, filters `user_id` and `attributes.category`. Create with `python scripts/create_indexes.py`. Free tier allows 3 search indexes.
+- Atlas index `closet_vector`, filters `user_id` and `attributes.category`. Also filter `has_description` (added Nov 14). Create with `python scripts/create_indexes.py`. Free tier allows 3 search indexes.
 
 ## 6. Trends (Part 4) `[BUILT]`
 
@@ -169,8 +171,8 @@ Stored document (`TrendDoc`, validated for both seed file and agent output)
 - Signals in code: `find_matches(user, attrs, k=5)` and the category-filtered `get_trends_for_prompt()` run in parallel. Best match = highest score among color-compatible matches. `t_c = clamp(user.look_thresholds[category] or look_similarity, 0.70, 0.92)`, `gray_margin` 0.04 in `config/thresholds.json`. Zones: `forced` at `t_c + margin` or above, `gray` within the margin, `none` below.
 - Allowed set in code: have_this_look only in forced or gray (forced allows nothing else). micro_trend only when a filtered trend has `lifespan_bucket == "short"`. good_buy always.
 - Claude call: `CLAUDE_MODEL` (`claude-haiku-5-5`), forced tool use with `strict: true`, `output_config.effort: "low"`, thinking disabled. No temperature: the API rejects it ("Extra inputs are not permitted"). Images (target crop, top 1 or 2 closet photos) only in the gray zone. The tool enum always lists all three verdicts (a fixed strict schema avoids a one-time schema compile of about 4 s), and the allowed set is enforced in code. Forced `tool_choice` returns 400 on Opus 5.5 and Sonnet 5.5, so a model change needs `auto`.
-- Guardrails in code: a verdict outside the allowed set is downgraded in priority order with a template reason; matched ids not in the provided matches are dropped; have_this_look with no valid ids downgrades (in the forced zone the best match is filled in instead); micro_trend needs `matched_trend_name` in the list; reasons over 30 words become a template; a small closet with no matches must say "I don't see this in your closet". Every change is logged in `override {rule, code_said, claude_said}` (the first) and `overrides` (all).
-- Timing: attempt 1 times out at 6 s, the retry at 4 s, then a code-only verdict (`decided_by: "fallback"`). Measured: 3 to 4 s typical (attributes 0.8 to 1.5 s, matches and trends about 0.3 s, Claude 1.6 to 2.4 s), above the 3 s target. Worst case: attributes time plus 10 s. The extension times out `/analyze` at 12 s and shows "Second look unavailable".
+- Guardrails in code: a verdict outside the allowed set is downgraded in priority order with a template reason; matched ids not in the provided matches are dropped; have_this_look with no valid ids downgrades (in the forced zone the best match is filled in instead); micro_trend needs `matched_trend_name` in the list; reasons over 30 words become a template; a small closet with no matches must say "I don't see this in your closet". Wording rules (Nov 14): "I don't see this in your closet" only when the category has no candidate matches; a good_buy with candidates names the closest item and how it differs; have_this_look names the matched item and never hedges (may, might, maybe, possibly, perhaps, lookalike). Violations (`not_seen_with_match`, `hedged_have_this_look`, `matched_item_not_named`, `closest_item_not_named`) are replaced by a code template and logged in `overrides`. The Claude payload includes `closest_match` (name, attributes, same_color_family, differences), even below threshold. Every change is logged in `override {rule, code_said, claude_said}` (the first) and `overrides` (all).
+- Timing: attempt 1 times out at 6 s, the retry at 4 s, then a code-only verdict (`decided_by: "fallback"`). Since Nov 14 the whole engine answers by about 10.5 s: product photo fetched once (3 s cap, then text only), attributes capped at 7 s, each Claude attempt cut to the time left, an attempt with under 1.5 s left is skipped. Trends and closet size start before attributes. `AnalyzeResponse` adds optional `attributes`, so the ownership question needs no extra `/attributes` call. Measured click to verdict: price on page median 3.5 s (worst 4.6 s); no price on page median 4.0 s (was 5.9 s). Measured: 3 to 4 s typical (attributes 0.8 to 1.5 s, matches and trends about 0.3 s, Claude 1.6 to 2.4 s), above the 3 s target. Worst case: attributes time plus 10 s. The extension times out `/analyze` at 12 s and shows "Second look unavailable".
 - Code-only paths (never an error to the shopper): attributes failed, embedding or Atlas error, both Claude attempts failed. Not apparel: good_buy, reason "This isn't clothing, so there's nothing to compare it with."
 - Wears: `config/wears.json` category averages, marked unverified. `expected_wears`, `cost_per_wear` and `wears_estimated: true` on good_buy only. The card labels them "Estimate".
 - Alternatives on micro_trend only, from `alternatives_for_trend(matched_trend)`.
@@ -214,7 +216,7 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 ### `POST /action`
 - Takes `{verdict_id, action: skipped|bought}`. Returns `{ok, balances: {checking_cents, savings_cents, placeholder}, transfer: {status: done|pending|failed|no_price, amount_cents} | null}` (transfer is additive, Part 6).
 - The action is saved first (existing behavior). `bought` is unchanged: no Nessie call, placeholder balances, Buy anyway auto-add (Part 3). The store cart is never touched.
-- `skipped` by a Nessie user: claims `verdict.transfer` atomically (a double click never moves money twice), then moves `round(price * 100)` cents from Checking to Savings with description `Second Look skip <verdict_id>`, all inside a 3 s budget. `done` means Nessie accepted the transfer (Nessie settles it about a minute later).
+- `skipped` by a Nessie user: claims `verdict.transfer` atomically (a double click never moves money twice), then moves `round(price * 100)` cents from Checking to Savings with description `Second Look skip: <item name> [<verdict_id>]` (name capped at 60 chars, brackets and control characters removed; Nessie allows 200), all inside a 3 s budget. The duplicate check matches on `[<verdict_id>]` and still recognizes the old format `Second Look skip <verdict_id>`. `done` means Nessie accepted the transfer (Nessie settles it about a minute later).
 - Timeout or error: `pending`, then one background retry that first searches Checking for the exact description, so a transfer that landed is never repeated. Second failure: `failed`; a later Skip click retries with the same check. Never raises to the shopper.
 - Checking below the amount: deposit the shortfall plus 150000 cents (`Second Look top-up <verdict_id>`, never repeated), answer `pending`, and transfer in the background once the deposit settles (up to 120 s). Measured: done after about 50 s.
 - No price: `transfer.status: "no_price"`, no Nessie call.
@@ -245,12 +247,12 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 - `GET /dashboard` returns `{money_kept, waste_avoided, verdicts (last 50), cost_per_wear}`. `money_kept` is still the local sum of `item.price` over verdicts with `action == skipped` (now in `backend/services/money.py`). `waste_avoided` is estimated kg CO2e avoided by skipped items (Avni, `backend/impact.py`), null when no skipped item has a sourced category figure. `cost_per_wear` is null for now.
 - `GET /impact` (JWT, Avni) returns `{money_kept, items_skipped, co2e_kg, co2e_items_counted, co2e_sources: [{category, kg_co2e, source, url}]}`. Figures come only from `backend/config/impact.json`, which holds sourced per-category numbers (for example jeans 33.4 kg, Levi's 501 lifecycle assessment). Categories without a sourced figure are not counted.
 - `GET /cart-summary` is a placeholder (all zero, `placeholder: true`). `GET /dashboard-ui` serves the page.
-- Only Skip it counts toward money kept. Known gaps: money_kept includes skips from before Part 6 (no transfer), so it can differ from Nessie Savings; Skip then Buy anyway does not reverse the transfer; the dashboard page does not show Nessie balances yet; verdict times show UTC as if local (5 hours off in EST).
+- Only Skip it counts toward money kept. Known gaps: money_kept includes skips from before Part 6 (no transfer), so it can differ from Nessie Savings; Skip then Buy anyway does not reverse the transfer; the dashboard page does not show Nessie balances yet; (times fixed Nov 14: API datetimes now carry "Z"). Demo money_kept matches Nessie Savings after the 2 pre-Nessie test skips were deleted on Nov 14.
 
 ### Card after an action (Part 6)
 - Buttons follow the verdict (Avni's UI refresh): good_buy highlights "Buy it" first and focuses it, with "Skip it anyway" second; have_this_look and micro_trend keep "Skip it" first, then "Buy anyway". Both skip buttons send `skipped`, both buy buttons send `bought`.
 - Popup (Avni's UI refresh): hanger logo, dark purple theme. On a product page it shows the check and Diagnose tools; elsewhere it shows the savings summary from `GET /impact`, with "Check this page anyway" to reveal the tools. Signup takes an optional phone.
-- Skip it with `transfer.status == "done"` and an amount: "Skipped. $X moved to savings" with a check. Anything else (pending, failed, no_price, no transfer field, timeout): "Skipped. Savings update pending". On a timeout the buttons stay disabled, since the skip may have landed. Buy anyway: unchanged ("Marked as bought").
+- Skip it with `transfer.status == "done"` and an amount: "Skipped. $X moved to savings" with a check. `no_price`: "Skipped. No price, so nothing moved". Anything else (pending, failed, no transfer field, timeout): "Skipped. Savings update pending". On a timeout the buttons stay disabled, since the skip may have landed. Buy anyway: unchanged ("Marked as bought").
 
 ## 10. Feedback (Part 7) `[PROPOSED]`
 
@@ -260,10 +262,11 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results after merging Avni's popup refresh and phone signup: unittest 147/147, card harness 73/73, extension E2E 66/66 with 2 SKIP.
+- Last known results after the Nov 14 fixes merge (polish, quick-add, wording, speed, account chat): unittest 199/199, card harness 73/73, iMessage routing 5/5, extension E2E 66/66 with 2 SKIP.
+- Earlier: after merging Avni's popup refresh and phone signup: unittest 147/147, card harness 73/73, extension E2E 66/66 with 2 SKIP.
 - Earlier: after the Claude price tier merge: unittest 147/147, price checks 23 plus 18 window checks, extension E2E 65/65 with 2 SKIP.
 - Earlier: results on the Part 5 merge (A, B, engine, card, eval): unittest 114/114, price parser 23 checks, extension E2E 61/61 after the Part 6 merge (60/60 twice after the Photon merge), unittest 133/133, card harness 65/65, with 2 SKIP (alternative link checks need a short-lifespan seed trend so a real micro_trend can occur).
-- Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@`, `test_nessie@` (Nessie enabled), `test_nessie_local@secondlook.test`, plus throwaway `e2e<timestamp>@example.com` users.
+- Test users in the shared DB: `test_altlinks@`, `test_target@`, `test_engine@`, `test_main_ab@`, `test_nessie@` (Nessie enabled), `test_nessie_local@`, `test_polish@` (Nessie enabled), `test_wording@`, `test_quickadd@`, `test_speed@`, `test_imchat@secondlook.test` (fake phone +15550001111), plus throwaway `e2e<timestamp>@example.com` users.
 - E2E has a SKIP result for checks that need data the shared DB does not have yet. A SKIP is not a pass.
 - Before any merge to main: all suites pass, then a smoke test of the chain `/attributes`, then embed, then `find_matches`, then trends lookup, then `/analyze`.
 - Tag before big merges: `git tag pre-integration main`.
@@ -309,6 +312,12 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 | 2 | Price tiers end at `/read-page` (first 8000 chars) | New final tier `POST /read-price`: Claude over text windows around every amount and the add-to-cart area, verbatim check in code. Price source `claude` | Contract (additive) |
 | 9 | `waste_avoided` always null; no impact endpoint | Avni: sourced CO2e estimate in `waste_avoided`, new `GET /impact` | Contract (additive) |
 | 14 | Phone only through `/imessage/link` | Avni: optional phone at signup, normalized to E.164, unique (409) | Contract (additive) |
+| 1 | API datetimes without offset | All API datetimes end in "Z"; dashboard shows local time | Code |
+| 5 | Hand-added items match poorly (0.64) | `has_description` flag and attributes-only comparison; index filter added | Contract (additive) |
+| 7 | "I don't see this in your closet" plus a near match; hedged have_this_look | Wording rules and four new guardrails with code templates | Contract |
+| 7 | Worst case attributes plus 10 s | Engine deadline about 10.5 s; `attributes` in AnalyzeResponse; startup warm-up | Contract (additive) |
+| 9 | Description `Second Look skip <id>`; no-price shows pending | `Second Look skip: <item> [<id>]`; no-price shows "Skipped. No price, so nothing moved" | Contract |
+| 14 | Free texts got a fixed help reply | `POST /imessage/ask` with per-account context; `imessage_messages` history | Contract (additive) |
 | 7 | Card buttons always "Skip it" then "Buy anyway" | Avni: good_buy shows "Buy it" first and highlighted, then "Skip it anyway". Card harness and E2E updated | Contract |
 
 ## 13. Open items
@@ -338,4 +347,8 @@ Main agent notes (merged from `feat/photon-imessage-agent` on Nov 14):
 - The Node agent lives in `imessage/` (Photon SDK, polling). It needs `PHOTON_*` values and the same `IMESSAGE_AGENT_SECRET` as the backend. The backend answers 503 on `/imessage/*` until `IMESSAGE_AGENT_SECRET` is set in the repo-root `.env`.
 - Known issue: `/imessage/own` answers the latest unanswered iMessage verdict, including have_this_look verdicts that never asked (`ask_ownership: false`). A later "yes" can then add a duplicate closet item. Fix: store `ask_ownership` on the verdict doc and filter on it.
 - Known issue: `/imessage/link` trusts any email (documented hackathon trust model). Needs a confirmation code before real users.
-- Closet items added by "yes" have no description, so they share the quick-add matching gap (section 5).
+- Closet items added by "yes" have no description, so they share the quick-add matching gap (section 5). Fixed Nov 14 by `has_description` matching.
+- Account chat (Nov 14): `POST /imessage/ask {phone, text}` returns `{message}` (same secret, 404 `phone_not_linked`, never 5xx). Claude answers in plain text, at most about 3 sentences, only from a per-account context built in code (`backend/services/account_context.py`): who (email, preference note, member since, settings, Nessie linked), closet (counts by category, newest 80 items), savings (money kept, items skipped, CO2e, Nessie balances and last 5 transfers when enabled), last 10 verdicts, last 8 messages. Context reads only by this user's id. 8 s timeout with a friendly fallback.
+- `imessage_messages` collection `{user_id, phone, direction: in|out, kind: text|photo|verdict|ownership|link|answer, text (max 2000), verdict_id?, created_at}`, index `(user_id, created_at)`. link, analyze, own and ask record both sides. No image bytes. Unlinked phones store nothing.
+- Agent routing (`imessage/src/route.mjs`): photo goes to analyze, an email to link, a short yes/no (6 words or fewer, no "?") to own, everything else (questions, greetings, help) to ask. The fixed HELP reply is gone.
+- Photon setup (Nov 14): the project has 25 shared-line seats, 1 used. `PHOTON_AGENT_HANDLE` must be the agent line's phone number (E.164), not a display name. Seats can be assigned by API (`POST /v1/projects/{id}/platforms/imessage/assignments`), planned next.
