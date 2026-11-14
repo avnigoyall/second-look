@@ -42,7 +42,9 @@ class AppError extends Error {
   }
 }
 
-async function api(path, { method = "GET", body, auth = true, timeoutMs = API_TIMEOUT_MS } = {}) {
+// onTiming(timing) receives {server_ms, request_ms, stages}: the X-Server-Ms and Server-Timing headers and
+// the request's wall time seen from here, for the check's timing line.
+async function api(path, { method = "GET", body, auth = true, timeoutMs = API_TIMEOUT_MS, onTiming } = {}) {
   const { token } = await SecondLookState.getState();
   if (auth && !token) throw new AppError("Log in from the Second Look popup first.", "auth");
   const headers = { "Content-Type": "application/json" };
@@ -50,6 +52,7 @@ async function api(path, { method = "GET", body, auth = true, timeoutMs = API_TI
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const started = Date.now();
   let res;
   try {
     res = await fetch(API_BASE + path, {
@@ -62,6 +65,11 @@ async function api(path, { method = "GET", body, auth = true, timeoutMs = API_TI
     clearTimeout(timer);
   }
   const data = await res.json().catch(() => ({}));
+  onTiming?.({
+    server_ms: Number(res.headers.get("X-Server-Ms")) || null,
+    request_ms: Date.now() - started,
+    stages: (res.headers.get("Server-Timing") || "").replace(/;dur=/g, ":").replace(/\s+/g, "") || null,
+  });
   if (res.status === 401 && auth) {
     await SecondLookState.clearState();
     throw new AppError("Your session expired. Log in again from the Second Look popup.", "auth");
@@ -121,9 +129,12 @@ async function signup({ email, password, phone }) {
 }
 
 async function analyzeItem({ item }) {
-  const result = await api("/analyze", { method: "POST", body: { item }, timeoutMs: ANALYZE_TIMEOUT_MS });
+  let timing = null;
+  const result = await api("/analyze", {
+    method: "POST", body: { item }, timeoutMs: ANALYZE_TIMEOUT_MS, onTiming: (t) => { timing = t; },
+  });
   await SecondLookSession.add({ ...item, verdict_id: result.verdict_id, verdict: result.verdict });
-  return result;
+  return { ...result, client_timing: timing };
 }
 
 // A timeout may still have reached the server, so the session records the action then too and

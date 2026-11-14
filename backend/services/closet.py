@@ -19,6 +19,7 @@ from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 
 from backend.db import closet_items
+from backend.services import timing
 from backend.services.embeddings import EmbeddingError, embed_image, embed_text
 from backend.services.item_understanding import attribute_string
 from backend.settings import ATTRIBUTES, ROOT
@@ -157,10 +158,12 @@ def find_matches(user_id: ObjectId, attrs: dict, k: int = 5) -> list[dict]:
     same number scripts/tune_matching.py prints, so thresholds.json means one thing everywhere. Items without
     a description are scored against the attributes-only text of `attrs` (see the module docstring).
     """
-    vectors = embed_query(attrs)
+    with timing.stage("embed_ms"):
+        vectors = embed_query(attrs)
     if vectors is None:
         return []
-    docs = search_closet(user_id, *vectors, attrs.get("category"), k)
+    with timing.stage("vector_search_ms"):
+        docs = search_closet(user_id, *vectors, attrs.get("category"), k)
     return [{"score": atlas_to_cosine(d["score"]), "id": str(d["_id"]), "name": d["name"],
              "attributes": d.get("attributes"), "status": d.get("status", "owned")} for d in docs]
 
