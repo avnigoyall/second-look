@@ -79,6 +79,19 @@ GET /social-trends and GET /social-graph return aggregate sample data. POST /tre
 
 If dashboard/trends.html exists, /trends-ui shows the community graph and term curve. The extension card adds one estimated Bluesky chatter line, with a link only when that page exists. No new action buttons are added. dashboard/index.html is unchanged.
 
+## Explore the graph
+
+The Style threads explorer at /graph-ui shows every style, community and author as one interactive graph. Build its data after the graph:
+
+```sh
+.venv/bin/python scripts/social_graph.py --name-limit 0 --edges-out .social_runs/social_graph_edges.json
+.venv/bin/python scripts/social_atlas.py
+```
+
+The first command reuses cached community names and writes every edge, including the inferred similarity edges. The second writes .social_runs/social_atlas.json (about 3.3 MB, served by GET /social-atlas) and per-author details (served one author at a time by GET /social-atlas/author/{hash prefix}). Neither command calls Vultr or Claude. Rebuild both after any new ingest, graph or metrics run, or newly collected authors will be missing communities.
+
+The page has two views. "Styles and communities" settles a ForceAtlas2 layout of the 42 styles and 502 communities, colored by garment family. "Every author" places all authors in discs around their community and shows observed replies, quotes and mentions; similar-post edges (215,853) can be switched on. Hover a node to light its connections. Click a style, community or author to open its details: post counts, first, fifth and last post, weekly share of sampled posts, top communities or styles, and sanitized post snippets that link to Bluesky. Search accepts style names, community names and author hash prefixes. Press / to search, Escape to clear, F to fit the graph. The libraries (sigma.js 4.0.6, graphology 0.26.0, graphology-library 0.8.0) are copied into dashboard/vendor, so the page works offline.
+
 ## Verify offline
 
 ```sh

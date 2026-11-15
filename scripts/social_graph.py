@@ -327,6 +327,8 @@ def main():
     parser.add_argument("--name-limit", type=int, default=0,
                         help="Explicit maximum Claude naming calls (default 0)")
     parser.add_argument("--output", type=Path, default=Path(".social_runs/social_graph.json"))
+    parser.add_argument("--edges-out", type=Path, default=None,
+                        help="Also write every full-graph edge (author hashes, kind, weight) for the atlas export")
     args = parser.parse_args()
     if args.name_limit < 0 or args.neighbor_workers < 1:
         parser.error("name-limit must be nonnegative and neighbor-workers positive")
@@ -372,6 +374,12 @@ def main():
                              "embedding_dims": spec.dims, "vector_index": spec.index,
                              "similarity_enabled": not args.interaction_only,
                              "neighbor_workers": args.neighbor_workers})
+    if args.edges_out:
+        args.edges_out.parent.mkdir(parents=True, exist_ok=True)
+        args.edges_out.write_text(json.dumps({
+            "computed_at": run_id, "similarity_enabled": not args.interaction_only,
+            "edges": sorted([a, b, data["kind"]] if a < b else [b, a, data["kind"]]
+                            for a, b, data in graph.edges(data=True))}, separators=(",", ":")))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(output, ensure_ascii=True))
     db["social_graph_meta"].update_one({"_id": "graph"}, {"$set": {"graph": output}}, upsert=True)
