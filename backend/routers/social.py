@@ -81,7 +81,8 @@ def social_graph():
         raise HTTPException(503, "Bluesky community graph is unavailable") from None
 
 
-ATLAS_PATH = Path(__file__).resolve().parents[2] / ".social_runs" / "social_atlas.json"
+# Committed with the code so a fresh clone can open /graph-ui without rebuilding (scripts/social_atlas.py).
+ATLAS_PATH = Path(__file__).resolve().parents[2] / "data" / "social_atlas" / "social_atlas.json"
 ATLAS_AUTHORS_PATH = ATLAS_PATH.with_name("social_atlas_authors.json")
 _ATLAS_AUTHORS: dict = {"mtime": None, "rows": {}}
 
