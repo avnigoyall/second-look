@@ -192,9 +192,9 @@ async function shot(page, name) {
     await s.card.locator(".checking").waitFor();
     shots.push(await shot(s.page, `loading-${v.tag}`));
     if (v.tag === "desktop-light") {
-      check(/checking\.\.\./.test(await s.card.locator(".checking").innerText()), "loading: first copy");
+      check(/Loading analysis/.test(await s.card.locator(".checking").innerText()), "loading: first copy");
       await sleep(5000);
-      check(/Still checking/.test(await s.card.locator(".checking").innerText()), "loading: calm slower copy after 5 s");
+      check(/Still loading/.test(await s.card.locator(".checking").innerText()), "loading: calm slower copy after 5 s");
       shots.push(await shot(s.page, `loading-slow-${v.tag}`));
     }
     await done(s);
@@ -213,40 +213,28 @@ async function shot(page, name) {
     shots.push(await shot(s.page, `unavailable-${v.tag}`)); await done(s);
   }
 
-  // Part 6: the confirmation after Skip it and Buy anyway, for each /action response shape.
+  // Buy and Skip close the card at once (Avni: "Skip just closes, Buy adds to the bag"). The action is still
+  // sent once in the background, whatever /action answers, and the page blur goes away with the card.
   const balances = { checking_cents: 120000, savings_cents: 52577, placeholder: false };
-  const PENDING = "Skipped. Savings update pending";
   const ACTION_CASES = [
-    { tag: "done", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "done", amount_cents: 2577 } } }, expect: "Skipped. $25.77 moved to savings", saved: true },
-    { tag: "pending", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "pending", amount_cents: 2577 } } }, expect: PENDING },
-    { tag: "failed", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "failed", amount_cents: 2577 } } }, expect: PENDING },
-    { tag: "no-price", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "no_price", amount_cents: null } } }, expect: "Skipped. No price, so nothing moved" },
-    { tag: "done-no-amount", click: "Skip it", action: { data: { ok: true, balances, transfer: { status: "done", amount_cents: null } } }, expect: PENDING },
-    { tag: "no-transfer", click: "Skip it", action: { data: { ok: true, balances: { checking_cents: null, savings_cents: null, placeholder: true } } }, expect: PENDING },
-    { tag: "timeout", click: "Skip it", action: { code: "timeout", error: "Second Look took longer than 15 seconds to answer.", delayMs: 300 }, expect: PENDING },
-    { tag: "error", click: "Skip it", action: { code: "offline", error: "Cannot reach the Second Look server. Is it running on localhost:8000?" }, expect: "Cannot reach the Second Look server. Is it running on localhost:8000?", error: true },
-    // RESPONSES.good is a good_buy verdict, whose buy button reads "Buy it" (Avni's UI refresh).
-    { tag: "buy", click: "Buy it", action: { data: { ok: true, balances } }, expect: "Marked as bought." },
+    { tag: "skip-done", click: "Skip it anyway", sent: "skipped", action: { data: { ok: true, balances, transfer: { status: "done", amount_cents: 2577 } } } },
+    { tag: "skip-error", click: "Skip it anyway", sent: "skipped", action: { code: "offline", error: "Cannot reach the Second Look server." } },
+    { tag: "skip-slow", click: "Skip it anyway", sent: "skipped", action: { data: { ok: true }, delayMs: 60000 } },
+    { tag: "buy", click: "Buy it", sent: "bought", action: { data: { ok: true, balances } } },
   ];
-  for (const v of variants) {
-    for (const c of ACTION_CASES) {
-      const s = await open(browser, { ...v, response: RESPONSES.good, action: c.action });
-      await s.card.locator(".badge").waitFor();
-      await s.card.getByRole("button", { name: c.click }).click();
-      const status = s.card.locator(".status");
-      await status.filter({ hasText: c.expect }).waitFor({ timeout: 3000 }).catch(() => {});
-      const text = (await status.innerText()).trim();
-      if (v.tag === "desktop-light") {
-        check(text === c.expect, `action ${c.tag}: "${c.expect}"`, text);
-        const cls = await status.getAttribute("class");
-        check(/saved/.test(cls) === !!c.saved && /error/.test(cls) === !!c.error, `action ${c.tag}: status style`, cls);
-        const disabled = await s.card.getByRole("button", { name: "Skip it" }).isDisabled();
-        check(disabled === !c.error, `action ${c.tag}: buttons ${c.error ? "re-enabled for retry" : "stay disabled"}`);
-        check((await s.page.evaluate(() => window.__actions)).join() === (c.click === "Skip it" ? "skipped" : "bought"), `action ${c.tag}: one action sent`);
-      }
-      shots.push(await shot(s.page, `action-${c.tag}-${v.tag}`));
-      errors.push(...s.page.errors); await s.ctx.close();
-    }
+  for (const c of ACTION_CASES) {
+    const s = await open(browser, { width: 1280, scheme: "light", response: RESPONSES.good, action: c.action });
+    await s.card.locator(".badge").waitFor();
+    const blurred = await s.page.evaluate(() => Boolean(document.getElementById("secondlook-shadow-host")?.shadowRoot?.querySelector(".backdrop")));
+    check(blurred, `action ${c.tag}: page is blurred behind the verdict`);
+    await s.card.getByRole("button", { name: c.click }).click();
+    const closed = await s.card.waitFor({ state: "detached", timeout: 1000 }).then(() => true).catch(() => false);
+    check(closed, `action ${c.tag}: card closes at once`);
+    await sleep(250);
+    const backdropGone = await s.page.evaluate(() => !document.getElementById("secondlook-shadow-host")?.shadowRoot?.querySelector(".backdrop"));
+    check(backdropGone, `action ${c.tag}: blur removed`);
+    check((await s.page.evaluate(() => window.__actions)).join() === c.sent, `action ${c.tag}: one action sent`);
+    errors.push(...s.page.errors); await s.ctx.close();
   }
 
   // Savings goal (CONTRACT section 15): one extra line under the skip message when /action sends goal.
@@ -308,18 +296,6 @@ async function shot(page, name) {
     check(names.find((n) => n.primary)?.text === primary, `buttons ${tag}: "${primary}" is highlighted`, JSON.stringify(names));
     check(names.some((n) => n.text === other && !n.primary), `buttons ${tag}: "${other}" is secondary`, JSON.stringify(names));
     check(focused.trim() === primary, `buttons ${tag}: focus on "${primary}"`, focused);
-    errors.push(...s.page.errors); await s.ctx.close();
-  }
-
-  // a slow /action never blocks the card: it shows Saving... and still closes
-  {
-    const s = await open(browser, { width: 1280, scheme: "light", response: RESPONSES.good, action: { data: { ok: true }, delayMs: 60000 } });
-    await s.card.locator(".badge").waitFor();
-    await s.card.getByRole("button", { name: "Skip it" }).click();
-    check((await s.card.locator(".status").innerText()) === "Saving...", "action slow: Saving... while waiting");
-    await s.card.getByRole("button", { name: "Close" }).click();
-    await s.card.waitFor({ state: "detached", timeout: 2000 });
-    check(true, "action slow: card still closes");
     errors.push(...s.page.errors); await s.ctx.close();
   }
 

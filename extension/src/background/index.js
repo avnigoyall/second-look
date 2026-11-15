@@ -259,6 +259,14 @@ const handlers = {
   },
   CHECK_ACTIVE_TAB: checkActiveTab,
   PAGE_KIND: pageKind,
+  // "View my wardrobe" in the popup: open the closet page, already logged in (token in the URL fragment,
+  // which never reaches a server; the page stores it and clears it from the address bar).
+  OPEN_CLOSET: async () => {
+    const { token } = await SecondLookState.getState();
+    if (!token) throw new AppError("Log in from the Second Look popup first.", "auth");
+    await chrome.tabs.create({ url: `${API_BASE}/closet-ui#token=${encodeURIComponent(token)}` });
+    return { opened: true };
+  },
   IMPACT: () => api("/impact"),
   IMESSAGE_STATUS: () => api("/imessage/status"),
   IMESSAGE_CONNECT: imessageConnect,
@@ -269,6 +277,9 @@ const handlers = {
     api("/read-price", { method: "POST", body: { url, name, windows }, timeoutMs: READ_PRICE_TIMEOUT_MS }),
   READ_URL: readUrl,
   SEND_ACTION: sendAction,
+  // Full analysis after a verdict: materials, lifespan, cost per wear, closet sentiment, outfits.
+  ANALYZE_DETAILS: ({ verdictId }) =>
+    api("/analyze/details", { method: "POST", body: { verdict_id: verdictId }, timeoutMs: 25000 }),
   SEND_FEEDBACK: ({ verdictId, value }) =>
     api("/feedback", { method: "POST", body: { verdict_id: verdictId, value } }),
   // Small-closet ownership question (Part 3). Only used when /analyze sends no attributes.

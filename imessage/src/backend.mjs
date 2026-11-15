@@ -33,3 +33,6 @@ export const answerOwnership = (phone, owns) => post("/imessage/own", { phone, o
 
 /** Answer any other text from this account's closet, savings, verdicts and recent messages. Returns { message }. */
 export const askQuestion = (phone, text) => post("/imessage/ask", { phone, text });
+
+/** Full analysis for a verdict, as ready-to-send text. Returns { message } (empty when nothing to add). */
+export const getDetails = (phone, verdictId) => post("/imessage/details", { phone, verdict_id: verdictId });

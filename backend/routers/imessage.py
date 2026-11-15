@@ -35,6 +35,7 @@ from backend.services import imessage_ask, photon_lines
 from backend.services.account_context import build_context, record_turn
 from backend.services.closet import item_name, new_closet_doc
 from backend.services.embeddings import EmbeddingError
+from backend.services.analysis_details import details_for
 from backend.services.verdict import decide
 
 log = logging.getLogger("secondlook.imessage")
@@ -132,6 +133,15 @@ class ConnectStatus(BaseModel):
     message: str
 
 
+class DetailsImessageRequest(BaseModel):
+    phone: str
+    verdict_id: str
+
+
+class DetailsImessageResponse(BaseModel):
+    message: str = Field(description="Ready-to-send iMessage text. Empty when there is nothing to add")
+
+
 # ---------- message text ----------
 
 def verdict_message(resp) -> str:
@@ -151,6 +161,38 @@ def verdict_message(resp) -> str:
             lines.append(f"Lasts longer: {alt.name} {alt.url}")
     elif resp.verdict == "good_buy" and resp.expected_wears:
         lines.append(f"Estimate: about {resp.expected_wears} wears.")
+    return "\n".join(lines)
+
+
+def details_message(d) -> str:
+    """Plain text for AnalysisDetails: materials, lifespan, cost per wear, closet, outfits, alternatives."""
+    lines = []
+    if d.materials:
+        fibers = ", ".join(f"{int(f.pct) if f.pct and f.pct.is_integer() else f.pct}% {f.fiber}" if f.pct else f.fiber
+                           for f in d.materials)
+        lines.append(f"Materials: {fibers}." + (" (from the photo)" if d.materials_source == "attributes" else ""))
+    dur = d.durability
+    if dur.note:
+        lines.append((f"{dur.pilling_risk.capitalize()} pilling risk. " if dur.pilling_risk else "") + dur.note)
+    for h in d.health_notes:  # always with the source (CONTRACT: no claim without a source)
+        lines.append(f"{h.note} Source: {h.url}")
+    life = [f"about {dur.expected_wears} wears" if dur.expected_wears else "",
+            f"{dur.expected_months} months" if dur.expected_months else ""]
+    life = ", ".join(x for x in life if x)
+    if life:
+        cost = f", ${d.cost.cost_per_wear:.2f} per wear ({d.cost.rating})" if d.cost.cost_per_wear is not None else ""
+        lines.append(f"Estimate: {life}{cost}.")
+    if d.trend_note:
+        lines.append(d.trend_note)
+    if d.similar_closet_items:
+        lines.append("Similar in your closet: " + ", ".join(c.name for c in d.similar_closet_items) + ".")
+    if d.outfits:
+        lines.append("Outfit ideas:" if d.outfits[0].uses_new_item else "Wear what you own instead:")
+        for o in d.outfits:
+            pieces = (["this piece"] if o.uses_new_item else []) + o.closet_item_names
+            lines.append(f"- {o.name}: {' + '.join(pieces)}")
+    for a in d.alternatives:
+        lines.append(f"Wears more for the money: {a.name} {a.url}")
     return "\n".join(lines)
 
 
@@ -300,3 +342,19 @@ def connect(body: ConnectRequest | None = None, user=Depends(current_user)):
 def status(user=Depends(current_user)):
     """This account's iMessage line. Refreshes opt-in from Photon at most once a minute."""
     return photon_lines.status_for(photon_lines.refresh_opt_in(user))
+
+
+@router.post("/details", response_model=DetailsImessageResponse)
+def details(body: DetailsImessageRequest, x_agent_secret: str | None = Header(None)):
+    """Full analysis for a verdict from POST /imessage/analyze, as a second text. Same engine as the card."""
+    require_agent(x_agent_secret)
+    user = user_for_phone(body.phone)
+    if user is None:
+        raise HTTPException(404, "phone_not_linked")
+    try:
+        doc = verdicts.find_one({"_id": ObjectId(body.verdict_id), "user_id": user["_id"]})
+    except Exception:
+        doc = None
+    if doc is None:
+        raise HTTPException(404, "verdict_not_found")
+    return {"message": details_message(details_for(user, doc))}

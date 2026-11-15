@@ -49,40 +49,34 @@
       </form>
     </div>
 
-    <!-- Product pages: check the item. Other pages: the savings summary. popup.js picks one with PAGE_KIND. -->
-    <div id="product-tools" class="stack" hidden>
-      <button id="check" class="primary">Check this item</button>
-    </div>
-    <p id="status" class="status" role="status"></p>
-
-    <section id="summary" class="summary" aria-labelledby="summary-title" hidden>
-      <h2 id="summary-title">Your savings so far</h2>
-      <div class="stats">
-        <div class="stat">
-          <span class="stat-value" id="money-kept">$0</span>
-          <span class="stat-label">kept by skipping</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value" id="co2e">0 kg</span>
-          <span class="stat-label"><span>CO<sub>2</sub>e avoided</span> <span class="tag">Estimate</span></span>
-        </div>
+    <!-- Savings dashboard: always shown. Product pages also get "Check this item" (popup.js, PAGE_KIND). -->
+    <section id="summary" class="summary" aria-labelledby="summary-title">
+      <h2 id="summary-title">Your savings</h2>
+      <div class="stat stat-money">
+        <span class="stat-label">Money saved by skipping</span>
+        <span class="stat-value" id="money-kept">$0</span>
+      </div>
+      <div class="stat stat-carbon">
+        <span class="stat-label"><span>Carbon emissions avoided</span> <span class="tag">Estimate</span></span>
+        <span class="stat-value" id="co2e">0 kg CO<sub>2</sub>e</span>
       </div>
       <p id="summary-detail" class="small muted"></p>
       <details id="summary-sources" class="sources" hidden>
         <summary class="small">How CO<sub>2</sub>e is estimated</summary>
         <ul id="sources-list" class="small"></ul>
       </details>
-      <p class="switch small muted">On a store page? <button type="button" id="check-anyway" class="link">Check this page anyway</button></p>
     </section>
 
-    <section aria-labelledby="session-title">
-      <div class="section-head">
-        <h2 id="session-title">Session items</h2>
-        <span id="session-count" class="muted small"></span>
-      </div>
-      <p id="session-empty" class="empty">Items you check show up here. Use the × to remove one you took out of your cart.</p>
-      <ul id="session-list"></ul>
-    </section>
+    <button id="wardrobe" class="secondary wardrobe">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 6.5a1.8 1.8 0 1 1 1.8-1.8"/><path d="M12 6.5v1.2L3.5 14.2c-.9.7-.4 2.1.7 2.1h15.6c1.1 0 1.6-1.4.7-2.1L12 7.7"/></svg>
+      View my wardrobe
+    </button>
+
+    <div id="product-tools" class="stack" hidden>
+      <button id="check" class="primary">Check this item</button>
+    </div>
+    <p id="check-anyway-row" class="switch small muted">On a store page? <button type="button" id="check-anyway" class="link">Check this page anyway</button></p>
+    <p id="status" class="status" role="status"></p>
 
     <section id="diag-section" aria-labelledby="diag-title" hidden>
       <div class="section-head">
@@ -101,7 +95,6 @@
 
   <p id="login-status" class="status" role="status"></p>
 
-  <script src="src/shared/sessionStore.js"></script>
   <script src="src/popup/popup.js"></script>
 </body>
 </html>

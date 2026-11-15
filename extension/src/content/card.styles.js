@@ -6,9 +6,9 @@
     :host { all: initial; }
 
     .sl {
-      --bg: #ffffff; --ink: #1e1a24; --muted: #6a6275; --line: #e3dcec; --soft: #f3f0f8;
-      --accent: #4b2a7b; --accent-ink: #ffffff; --danger: #a33a2b; --danger-soft: #fbeeeb;
-      --have: #3b5ba5; --trend: #a8620a; --good: #2f7d4f;
+      --bg: #fffcf7; --ink: #2a221c; --muted: #6f6154; --line: #e4d9cb; --soft: #efe6da;
+      --accent: #3f2e22; --accent-ink: #faf6f0; --danger: #9a3b2b; --danger-soft: #f6e7e2;
+      --have: #4e6577; --trend: #8f6026; --good: #566b41;
       --img-outline: oklch(0 0 0 / 0.1);
       --shadow:
         0px 0px 0px 1px oklch(0 0 0 / 0.06),
@@ -21,9 +21,9 @@
     }
     @media (prefers-color-scheme: dark) {
       .sl {
-        --bg: #1e1a26; --ink: #f2eef7; --muted: #a69db2; --line: #3a3244; --soft: #28222f;
-        --accent: #b79cf0; --accent-ink: #1e1230; --danger: #e07a6a; --danger-soft: #3a2420;
-        --have: #8aa6e8; --trend: #e6a454; --good: #6cc495;
+        --bg: #201a16; --ink: #f2ebe2; --muted: #ab9c8d; --line: #3a3029; --soft: #2a221c;
+        --accent: #c9a582; --accent-ink: #1c150f; --danger: #e08a76; --danger-soft: #3a2520;
+        --have: #9fb3c4; --trend: #d9aa6a; --good: #a6bd8a;
         --img-outline: oklch(1 0 0 / 0.1);
         --shadow:
           0px 0px 0px 1px oklch(1 0 0 / 0.08),
@@ -41,16 +41,24 @@
       border: 1px solid transparent; /* keeps an edge in forced-colors mode */
       pointer-events: auto;
       opacity: 1;
-      transition-property: opacity, translate, filter;
+      transition-property: opacity, translate;
       transition-duration: 150ms;
       transition-timing-function: ease-out;
     }
+    /* Blurs and dims the store behind the Buy / Skip verdict. Sits under the card (DOM order). */
+    .backdrop {
+      position: fixed; inset: 0; pointer-events: auto;
+      background: oklch(0.22 0.025 55 / 0.30); /* warm espresso veil */
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      opacity: 1; transition: opacity 200ms ease-out;
+    }
+    .backdrop[data-entering], .backdrop[data-leaving] { opacity: 0; }
     .card[data-entering] { opacity: 0; }
     .card[data-leaving] { opacity: 0; }
     @media (prefers-reduced-motion: no-preference) {
-      .card { translate: 0 0; filter: blur(0); }
-      .card[data-entering] { translate: 0 -12px; filter: blur(4px); transition-duration: 300ms; }
-      .card[data-leaving] { translate: 0 -12px; filter: blur(4px); }
+      .card { translate: 0 0; }
+      .card[data-entering] { translate: 0 -12px; transition-duration: 300ms; }
+      .card[data-leaving] { translate: 0 -12px; }
     }
 
     .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
@@ -81,14 +89,11 @@
     button.btn:disabled { opacity: 0.55; cursor: default; }
     button.primary { background: var(--accent); color: var(--accent-ink); }
     button.secondary { background: var(--soft); color: var(--ink); }
-    button.thumb { width: 36px; padding: 8px 0; background: var(--soft); color: var(--muted); }
-    button.thumb svg { width: 16px; height: 16px; }
-    button.thumb[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
     button.link { all: unset; cursor: pointer; color: var(--muted); font-size: 12px; text-decoration: underline; text-underline-offset: 2px; }
     @media (hover: hover) {
       .icon-btn:hover { background: var(--soft); color: var(--ink); }
       button.primary:not(:disabled):hover { background: color-mix(in oklch, var(--accent), black 8%); }
-      button.secondary:not(:disabled):hover, button.thumb:not(:disabled):not([aria-pressed="true"]):hover { background: color-mix(in oklch, var(--soft), var(--ink) 6%); }
+      button.secondary:not(:disabled):hover { background: color-mix(in oklch, var(--soft), var(--ink) 6%); }
       button.link:hover { color: var(--ink); }
     }
     button.btn:focus-visible, .icon-btn:focus-visible, button.link:focus-visible, input:focus-visible {
@@ -173,6 +178,31 @@
     .wears { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
     .tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: var(--muted); background: var(--soft); }
 
+    /* Full analysis (POST /analyze/details), collapsible, above the action buttons */
+    .analysis-loading { margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+    .analysis { margin-bottom: 12px; border-radius: 12px; background: var(--soft); font-size: 13px; }
+    .analysis summary {
+      display: flex; align-items: baseline; gap: 8px; padding: 10px 12px; cursor: pointer; list-style: none;
+      border-radius: 12px; outline-offset: 2px;
+    }
+    .analysis summary::-webkit-details-marker { display: none; }
+    .analysis summary::after { content: "Show"; margin-left: auto; font-size: 12px; font-weight: 600; color: var(--accent); }
+    .analysis[open] summary::after { content: "Hide"; }
+    .an-title { font-weight: 600; }
+    .an-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .an-row { display: grid; gap: 3px; padding: 8px 12px; border-top: 1px solid var(--line); }
+    .an-row:last-child { padding-bottom: 12px; }
+    .an-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+    .an-strong { font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .an-health { font-size: 12px; color: var(--muted); text-wrap: pretty; }
+    .an-health a, .an-list a { color: var(--accent); }
+    .an-list { margin: 0; padding-left: 16px; display: grid; gap: 3px; }
+    .an-list li { text-wrap: pretty; }
+    .an-rating { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; text-transform: capitalize; }
+    .an-rating.good { color: var(--good); background: color-mix(in oklch, var(--good), transparent 88%); }
+    .an-rating.fair { color: var(--trend); background: color-mix(in oklch, var(--trend), transparent 88%); }
+    .an-rating.poor { color: var(--danger); background: color-mix(in oklch, var(--danger), transparent 88%); }
+
     /* small-closet ownership question: quiet, sits above the buttons */
     .own { margin-bottom: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
     .own-q { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
@@ -244,13 +274,29 @@
       position: fixed; top: 16px; right: 16px; max-width: min(320px, calc(100vw - 32px)); box-sizing: border-box;
       display: flex; gap: 8px; align-items: center; padding: 10px 14px; border-radius: 12px;
       background: var(--bg); box-shadow: var(--shadow); border: 1px solid transparent; font-size: 13px; pointer-events: auto;
-      transition-property: opacity, translate, filter; transition-duration: 150ms; transition-timing-function: ease-out;
+      transition-property: opacity, translate; transition-duration: 150ms; transition-timing-function: ease-out;
     }
     .notice svg { width: 16px; height: 16px; flex: none; color: var(--accent); }
+    .notice-body { display: grid; gap: 2px; min-width: 0; }
+    .notice-sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
     .card ~ .notice { top: auto; bottom: 16px; }
     .notice[data-entering], .notice[data-leaving] { opacity: 0; }
     @media (prefers-reduced-motion: no-preference) {
-      .notice[data-entering], .notice[data-leaving] { translate: 0 -12px; filter: blur(4px); }
+      .notice[data-entering], .notice[data-leaving] { translate: 0 -12px; }
     }
+
+    /* ---------- editorial theme (brown / beige, serif headings, square buttons) ---------- */
+    .sl { --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif; }
+    .card { border-radius: 6px; }
+    .brand { font-family: var(--serif); font-size: 13px; letter-spacing: 0.14em; color: var(--ink); }
+    .item-name { font-family: var(--serif); font-size: 16px; font-weight: 600; }
+    .reason { font-family: var(--serif); font-size: 16px; line-height: 1.45; }
+    .badge { border-radius: 2px; text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; }
+    button.btn { border-radius: 3px; }
+    .row button.btn.primary, .row button.btn.secondary { text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+    .row button.btn.secondary { background: transparent; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+    .analysis, .analysis summary { border-radius: 4px; }
+    .an-title { font-family: var(--serif); font-size: 15px; }
+    .tag, .an-rating { border-radius: 2px; }
   `;
 })(globalThis);

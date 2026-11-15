@@ -185,6 +185,18 @@ def settings_of(user: dict) -> dict:
     return {"auto_add_purchases": (user.get("settings") or {}).get("auto_add_purchases") is not False}
 
 
+@router.delete("/closet/{item_id}", response_model=m.OkResponse)
+def delete_closet_item(item_id: str, user=Depends(current_user)):
+    """Remove one of the user's closet items for good (closet page trash button). 404 if it is not theirs."""
+    try:
+        oid = ObjectId(item_id)
+    except (InvalidId, TypeError):
+        raise HTTPException(404, "Closet item not found")
+    if closet_items.delete_one({"_id": oid, "user_id": user["_id"]}).deleted_count == 0:
+        raise HTTPException(404, "Closet item not found")
+    return {"ok": True}
+
+
 @router.get("/settings", response_model=m.Settings)
 def get_settings(user=Depends(current_user)):
     return settings_of(user)

@@ -48,6 +48,8 @@ class Item(BaseModel):
     url: str | None = None
     description: str | None = Field(None, max_length=20000, description="Store description, if the page has one")
     breadcrumb: str | None = Field(None, max_length=2000, description="Category path, for example 'Men > Pants'")
+    materials: str | None = Field(None, max_length=1000,
+                                  description="Composition text from the page, e.g. '60% cotton, 40% polyester'")
 
 
 class Alternative(BaseModel):
@@ -64,6 +66,8 @@ class Alternative(BaseModel):
 class Outfit(BaseModel):
     name: str
     closet_item_ids: list[str] = []
+    uses_new_item: bool = Field(False, description="True when the outfit includes the item being checked")
+    closet_item_names: list[str] = Field([], description="Names for closet_item_ids, same order (Full analysis)")
 
 
 class User(BaseModel):
@@ -511,6 +515,54 @@ class ImpactSource(BaseModel):
     kg_co2e: float
     source: str
     url: str
+
+
+# ---------- Full analysis (POST /analyze/details) ----------
+
+class Fiber(BaseModel):
+    fiber: str
+    pct: float | None = Field(None, description="Percent of the main fabric. None when only the fabric type is known")
+
+
+class HealthNote(BaseModel):
+    """From config/material_health.json only, never from a model. Always shown with its source."""
+    subject: str = Field(description="The fiber or finish the note is about, e.g. 'polyester', 'wrinkle-free finish'")
+    note: str
+    source: str
+    url: str
+
+
+class Durability(BaseModel):
+    pilling_risk: Literal["low", "medium", "high"] | None = None
+    note: str = ""
+    expected_wears: int | None = Field(None, description="Estimate")
+    expected_months: int | None = Field(None, description="Estimate")
+
+
+class CostEfficiency(BaseModel):
+    cost_per_wear: float | None = Field(None, description="price / expected_wears, estimate")
+    rating: Literal["good", "fair", "poor"] | None = None
+
+
+class AnalysisDetails(BaseModel):
+    """Second step after /analyze: materials, lifespan, cost per wear, closet sentiment, outfits."""
+    verdict_id: str
+    materials: list[Fiber] = []
+    materials_source: Literal["page", "attributes", "none"] = "none"
+    health_notes: list[HealthNote] = []
+    durability: Durability = Durability()
+    trend_note: str | None = None
+    cost: CostEfficiency = CostEfficiency()
+    similar_closet_items: list[ClosetItem] = Field([], description="Closet pieces with the same feel, with image_data")
+    outfits: list[Outfit] = []
+    alternatives: list[Alternative] = Field([], description="General-purpose picks, only when cost efficiency is poor")
+    closet_checked: bool = Field(False, description="False when the closet is empty, so closet parts were skipped")
+    decided_by: Literal["claude", "code"] = "code"
+    errors: list[str] = []
+
+
+class AnalysisDetailsRequest(BaseModel):
+    verdict_id: str
 
 
 class ImpactResponse(BaseModel):

@@ -53,6 +53,40 @@
     return best;
   }
 
+  // The product photo the shopper is looking at right now. Stores set JSON-LD and og:image once, for the
+  // default color; picking another color or style swaps the gallery photo but not those tags. So the
+  // visible main photo is the truth for the selected variant (thumbnail, and the color the backend sees).
+  // Rules: visible and on screen horizontally (not an off-screen carousel slide), near the top of the
+  // page, at least 180 px, a garment-like shape, not in header/nav/footer and not a tile linking to
+  // another product. Largest wins.
+  function displayedProductImage() {
+    const vw = window.innerWidth;
+    const maxTop = window.innerHeight * 1.8;
+    let best = null;
+    let bestArea = 0;
+    for (const img of document.images) {
+      const src = img.currentSrc || img.src;
+      if (!src || /^data:/i.test(src) || /\.svg(\?|$)/i.test(src)) continue;
+      const r = img.getBoundingClientRect();
+      if (r.width < 180 || r.height < 180) continue;
+      if (r.right <= 0 || r.left >= vw) continue; // carousel slide parked off screen
+      if (r.top + window.scrollY > maxTop) continue; // recommendations further down
+      const ratio = r.width / r.height;
+      if (ratio < 0.4 || ratio > 2) continue; // banners and strips
+      if (img.closest("header, nav, footer, [role=banner], [role=navigation]")) continue;
+      const link = img.closest("a[href]");
+      if (link && link.href !== location.href && !/\.(jpe?g|png|webp|avif)(\?|$)/i.test(link.href)) continue; // tile for another item
+      const style = getComputedStyle(img);
+      if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) < 0.1) continue;
+      const area = r.width * r.height;
+      if (area > bestArea) {
+        best = src;
+        bestArea = area;
+      }
+    }
+    return best;
+  }
+
   async function askGemini(imageUrl) {
     const text = visibleText();
     if (!text) return { error: "page has no visible text" };
@@ -114,9 +148,13 @@
     details.tiers.jsonld = details.tiers.jsonld || t1 || { found: false };
     details.tiers.meta = details.tiers.meta || t2 || { found: false };
 
+    const shown = displayedProductImage();
+    details.image = { displayed: shown, jsonld: t1?.image_url || null, meta: t2?.image_url || null };
     const item = {
       name: t1?.name || t2?.name || null,
-      image_url: t1?.image_url || t2?.image_url || null,
+      // The visible photo follows the selected color/style; structured data is the fallback.
+      image_url: shown || t1?.image_url || t2?.image_url || null,
+      image_source: shown ? "page" : t1?.image_url ? "jsonld" : t2?.image_url ? "meta" : null,
       price: t1?.price ?? t2?.price ?? null,
       currency: t1?.currency || t2?.currency || null,
       store: global.SecondLookMeta.storeName(),

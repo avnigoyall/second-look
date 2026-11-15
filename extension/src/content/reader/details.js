@@ -54,13 +54,50 @@
     return parts.length ? clean(parts.join(SEPARATOR), MAX_BREADCRUMB) : null;
   }
 
-  function readDetails() {
-    try {
-      const nodes = jsonLdNodes();
-      return { description: readDescription(nodes), breadcrumb: readBreadcrumb(nodes) };
-    } catch {
-      return { description: null, breadcrumb: null };
+  // Fiber composition ("60% cotton, 40% polyester") for the Full analysis. The backend parses it; this only
+  // finds the text: JSON-LD material, then text under a Composition / Material / Fabric heading, then any
+  // short page text with "N% fiber". Visible text only, capped.
+  const MAX_MATERIALS = 500;
+  const PCT_FIBER = /\b\d{1,3}(?:[.,]\d+)?\s*%\s*(?:organic |recycled |pima |supima )?(cotton|polyester|nylon|polyamide|elastane|spandex|lycra|viscose|rayon|lyocell|tencel|modal|acrylic|acetate|wool|merino|cashmere|alpaca|mohair|silk|linen|hemp|leather|polyurethane)\b/i;
+  const HEADING = /^(composition|materials?|fabric( (&|and) care)?|material (&|and) care|content|fibre content|fiber content)\b/i;
+
+  // Text of an element with a space between its pieces: textContent would glue "Care" and "Shell:" into
+  // "CareShell:", hiding the label. innerText is empty for a closed <details>, so walk the text nodes.
+  function spacedText(node) {
+    if (!node) return "";
+    const parts = [];
+    const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) parts.push(walker.currentNode.nodeValue);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  function readMaterials(nodes) {
+    const product = nodes.find((n) => hasType(n, "Product") || hasType(n, "ProductGroup"));
+    const fromLd = [].concat(product?.material || []).map((m) => (typeof m === "string" ? m : m?.name)).filter(Boolean).join(", ");
+    if (fromLd && PCT_FIBER.test(fromLd)) return clean(fromLd, MAX_MATERIALS);
+
+    // A heading ("Composition") followed by its text block.
+    for (const h of document.querySelectorAll("h2, h3, h4, h5, dt, button, summary, strong, span, p")) {
+      const label = h.textContent.replace(/\s+/g, " ").trim();
+      if (label.length > 40 || !HEADING.test(label)) continue;
+      const scope = h.closest("details, dl, section, li, div") || h.parentElement;
+      const text = spacedText(scope);
+      if (PCT_FIBER.test(text) && text.length < 2000) return clean(text, MAX_MATERIALS);
     }
+    // Any short element that reads like a fiber line.
+    for (const el of document.querySelectorAll("li, p, span, div, td, dd")) {
+      if (el.children.length > 3) continue;
+      const text = spacedText(el);
+      if (text.length < 200 && PCT_FIBER.test(text)) return clean(text, MAX_MATERIALS);
+    }
+    return fromLd ? clean(fromLd, MAX_MATERIALS) : null; // "Cotton" without a percent still helps
+  }
+
+  function readDetails() {
+    let nodes = [];
+    try { nodes = jsonLdNodes(); } catch { /* keep going with DOM fallbacks */ }
+    const safe = (fn) => { try { return fn(nodes); } catch { return null; } };
+    return { description: safe(readDescription), breadcrumb: safe(readBreadcrumb), materials: safe(readMaterials) };
   }
 
   global.SecondLookDetails = { readDetails };
