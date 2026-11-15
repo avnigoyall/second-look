@@ -293,6 +293,7 @@
   // ---------- overlay: glows under the WebGL canvas, haloed labels above it ----------
 
   const SERIF = '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif';
+  const styleLabelSize = (a) => (a.size > 14 ? 14 : 13);
   const overlay = { glow: null, labels: null };
 
   function overlayCanvas(id, z) {
@@ -383,7 +384,7 @@
       const p = screenNode(node);
       if (!onScreen(p)) continue;
       const strong = priority < 2 || a.kind === "style" || a.anchor === "major";
-      const size = node === state.selected ? 17 : a.kind === "style" ? (a.size > 14 ? 16 : 14.5) : a.anchor ? 14 : 12.5;
+      const size = node === state.selected ? 15 : a.kind === "style" ? styleLabelSize(a) : a.anchor ? (a.anchor === "major" ? 12.5 : 12) : 11.5;
       labels.font = `${a.kind === "author" ? "500 " : ""}${size}px ${a.kind === "author" ? "-apple-system, system-ui, sans-serif" : SERIF}`;
       const text = a.label;
       const width = labels.measureText(text).width;
@@ -506,7 +507,7 @@
     const measure = document.createElement("canvas").getContext("2d");
     const boxes = styles.map(({ node, a }) => {
       // Same font as drawOverlay, plus the halo and a little air.
-      measure.font = `${a.size > 14 ? 16 : 14.5}px ${SERIF}`;
+      measure.font = `${styleLabelSize(a)}px ${SERIF}`;
       const textWidth = measure.measureText(a.label).width;
       return { node, x: a.x, y: a.y, w: (a.size + 7 + textWidth + 14) * unitsPerPx, h: 24 * unitsPerPx, r: a.size * unitsPerPx };
     });
@@ -542,7 +543,7 @@
     g.forEachNode((node, a) => {
       if (a.kind !== "style") return;
       const r = renderer.scaleSize(a.size);
-      measure.font = `${a.size > 14 ? 16 : 14.5}px ${SERIF}`;
+      measure.font = `${styleLabelSize(a)}px ${SERIF}`;
       const w = measure.measureText(a.label).width;
       // Clear zone: the node disc plus its label to the right, in graph units.
       items.push({ node, x: a.x, y: a.y, left: (r + 6) * unitsPerPx, right: (r + 7 + w + 8) * unitsPerPx,
