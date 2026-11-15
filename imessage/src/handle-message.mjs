@@ -3,6 +3,7 @@ import { analyzePhoto, answerOwnership, askQuestion, getDetails, linkPhone, NotL
 import { toJpeg } from "./image.mjs";
 import { downloadAttachment, parseContent, reply } from "./photon.mjs";
 import { replySenderId, routeMessage } from "./route.mjs";
+import { demoReply } from "./photon_demo_replay.mjs";
 
 const LINK_PROMPT =
   "Hi! I'm Second Look. To check photos against your closet and answer questions about your account, reply with the email you use for Second Look.";
@@ -22,6 +23,7 @@ export async function handleMessage(msg) {
   const phone = msg.sentBy.handle;
   const send = (text) => replyTo(msg, text);
   const { text, attachmentIds } = parseContent(msg.content);
+  const demo = await demoReply({ senderId: msg.sentBy?.id ?? phone, text, hasImage: attachmentIds.length > 0, getImage: () => downloadAttachment(attachmentIds[0]) }); if (demo) return send(demo);
 
   const route = routeMessage(text, attachmentIds.length > 0);
   if (route.kind === "photo") return handlePhoto({ msg, phone, send, text, attachmentId: attachmentIds[0] });

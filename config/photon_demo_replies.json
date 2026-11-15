@@ -1,0 +1,22 @@
+[
+  {"id": "top1_fast_fashion",
+   "step": 1,
+   "expects": "image",
+   "delay_ms": 7000,
+   "match": {"text_contains": "what do you think of this top"},
+   "reply": "hm, that top kind of looks like it's from Shein? I can't be sure from a pic, so check the tag. If it is, I'd be careful: Greenpeace tested 56 Shein items and about a third went over EU chemical limits, with stuff like phthalates and PFAS showing up in some. Maybe look at the fabric before you buy.",
+   "source": "hand_written"},
+  {"id": "top2_closet_duplicate",
+   "step": 2,
+   "expects": "image",
+   "delay_ms": 4000,
+   "reply": "this looks like the blue halter top you already have in your closet. want to just wear that one?",
+   "source": "hand_written"},
+  {"id": "top2_thanks",
+   "step": 3,
+   "expects": "text",
+   "delay_ms": 3000,
+   "match": {"text_contains": "forgot about that one"},
+   "reply": "ha, it happens. send me anything else you're unsure about.",
+   "source": "hand_written"}
+]
