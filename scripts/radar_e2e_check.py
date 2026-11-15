@@ -34,8 +34,8 @@ os.environ.setdefault("NESSIE_API_KEY", "")
 os.environ["SECONDLOOK_WARMUP"] = "0"
 os.environ["SOCIAL_RADAR_ENABLED"] = "1"  # this process only
 
-from bson import ObjectId  # noqa: E402
-from pymongo import MongoClient  # noqa: E402
+from bson import ObjectId
+from pymongo import MongoClient
 
 E2E_DB = "secondlook_radar_e2e"
 MICRO = "e2e micro style"
