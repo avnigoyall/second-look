@@ -145,6 +145,92 @@ Each item is tied to the stored reasons or hypotheses for the named styles.
 5. **Overlapping terms.** Slingback heels overlaps kitten heels; high heels overlaps the wider heels family (shared
    largest community). The rules treat each term as independent.
 
+## Root causes: why the rule and the agent disagree (follow-up checks, Nov 15)
+
+These checks read Atlas only (social_trends, social_posts). No model calls. Numbers are measured; the readings of
+them are marked as hypotheses.
+
+### 1. Collection depth changed on 2026-08-31, and it made every still_active label
+
+- Before week 2026-08-31, at most 1 term per week had more than 20 posts (the first-page cap). From that week on,
+  13 to 15 terms per week have more than 20 (up to 119): saturated windows were paginated deeper only for the last
+  11 weeks. The weekly corpus goes from 427 to 492 posts to 1152 to 1270.
+- Effect on share (sum of count / sum of corpus_count, after vs before 2026-08-31): the deepened terms go up (cargo
+  pants 2.22x, cherry red 2.07x, leopard print 2.05x, graphic tee 2.03x, white t-shirt 2.02x, chinos 1.87x, leg
+  warmers 1.68x, quarter zip 1.58x). Every term that was not deepened goes down (median about 0.4x; for example
+  kitten heels 0.37x, skinny jeans 0.40x, straight leg jeans 0.43x).
+- All 4 rule still_active labels (Levi's 501, cargo pants, cherry red, quarter zip) are deepened terms. still_active
+  means "last weeks at or above half of the peak". The deeper pages raise recent share, and the rule reads that as
+  a run that is still going. Reading: on this corpus, still_active measures collection depth, not chatter. The agent
+  dropped 3 of the 4 (cargo pants to established, cherry red and Levi's 501 to unknown). It kept quarter zip.
+- The same step makes every other term look like it is fading after August. So the data cannot separate the press
+  seeds labeled "fading" (skinny jeans 0.40x, dad sneakers 0.26x, mini bag 0.42x, high heels 0.39x) from the ones
+  labeled "rising" (straight leg jeans 0.43x, poplin shirt 0.66x, soft suiting 0.23x). The denominator change is
+  larger than any real change.
+
+### 2. Each week's sample is mostly that week's Sunday
+
+Pre-2026-08-31 search posts by weekday: Monday 693, Tuesday 875, Wednesday 1059, Thursday 1430, Friday 2133,
+Saturday 2851, Sunday 7890. Sunday holds 47 percent and Monday 4 percent. The first page returns the newest posts
+before the window end. So for a saturated term, "20 posts this week" means "20 posts in the last hours of
+Sunday". A count capped at 20 is a flag that the cap was hit, not a volume. A peak that falls on a weekday can
+be missed completely.
+
+Measured fix candidate (not applied): estimate weekly volume from how much time the first page covers, as
+20 / (hours from the 20th-newest post to the window end) x 168. Tested on the 99 deepened windows (more than 40
+posts, from 2026-08-31 on), with the deep count as reference: 74 of 99 estimates within 2x, median estimate/actual
+1.19 (quartiles 0.97 and 1.91), Spearman 0.69. The estimate runs high, which fits the weekend skew (the end of the
+week is busier than its average). The deep counts themselves stop near 118 to 119, so they may also be capped. This
+estimate would remove the cap from all 51 weeks without new requests.
+
+### 3. Saturation turns a large style into a "staple"
+
+Test 3 asks whether the first 8 weeks average at least half of the peak. When most weeks sit at the cap, early and
+peak values are both about 20, so test 3 fails and the label is established, whatever the true shape. Weeks at 20
+or more (of 41 before 2026-08-31): leg warmers 22, leopard print 21, chinos 21, graphic tee 19, butter yellow 17,
+cherry red 15. Reading: for the most-discussed terms, established partly means "always over the cap". The agent
+agreed on leg warmers, leopard print and graphic tee. It refused chinos, butter yellow and cherry red because the
+posts were off-topic.
+
+### 4. Fashion names are borrowed words, so text search has a precision limit
+
+Of the 6 styles where the agent said unknown, 5 are words with a stronger meaning outside fashion: a colour
+(butter yellow), a record label (cherry red), a nationality in Spanish (chinos), a dance (sambas) and an art and
+adult tag (high heels). The sixth (Levi's 501) is a product code that resale bots post. Reading: trend names are
+usually made from ordinary words. So the terms that sound most like trends (colours, aesthetics, nicknames) are the
+ones a keyword sample measures worst. The rule gives these terms its confident labels because the cap is hit
+often. The agent read samples of 10 to 20 posts and refused to label them. This is the largest real gap between
+the two methods.
+
+### 5. The two methods answer different questions on long runs
+
+7 disagreements are runs that cover the whole window. The rule asks "did I see a wave start and end inside 12
+months?" It cannot see the start, so it says unknown. The agent asks "what is this style?" It sees steady chatter
+from start to end and says established. Both are consistent with the data. Hypothesis: the agent fills the gap with
+prior knowledge as well as data (for example, it knows straight leg jeans and block heels are long-lived). The
+report cannot separate those two sources.
+
+### 6. Why neither method finds a micro trend, and what the manual labels show
+
+- Selection: the 42 terms were picked because they are already known trend names (press seeds, a curated list). A
+  known name is usually already active when the window opens. So 27 of 42 styles have a left-censored rise, and the
+  rule's micro_trend path (rise seen, fall within 16 weeks) is almost unreachable. Finding micro trends needs term
+  discovery (new phrases rising from zero in the corpus), not checking known names.
+- The 3 styles the team labeled micro_trend (balloon jeans, mesh flats, micro bag) all have too little data: at most
+  3, 3 and 18 posts in any week before 2026-08-31. Hypothesis: on Bluesky, a press-named micro trend shows up as
+  near silence, not as a spike. Some press "trends" may be editorial or retail names that never become everyday
+  words. A "press says trend, sample says silence" flag could be a signal in its own right.
+- Tempo: the micro_trend definition (short life, 16 weeks or less) may be faster than what this sample can show.
+  Styles the press calls trends (barrel jeans, butter yellow) were present for all 51 weeks. With a 12-month window,
+  a 1 to 2 year trend cycle looks like a staple.
+
+### 7. Resale listings as a signal (hypothesis)
+
+Levi's 501's late spike was about 8 of 10 price and discount listings, and poplin shirt chatter is mostly shop and
+vintage catalog posts. Listing volume measures supply, not demand. A rise in resale listings for a style could mean
+people are selling it, which could be an early fading signal. Not tested: it needs listing and organic posts
+counted separately over time.
+
 ## Variation test (same 5 styles, three runs)
 
 Styles (`--random 5 --seed 7`, manual styles excluded): balloon pants, barrel jeans, capri pants, kitten heels,
