@@ -276,6 +276,10 @@
         res = await sending;
         // Rare: the store re-rendered its button while the card was open, so the replay had nothing to click.
         if (action === "bought" && res?.bag === "missing") showNotice("Press the store's add button again to add it.");
+        // Bought something skipped earlier: that skip's money moves back from Savings (Nessie, in the background).
+        else if (action === "bought" && res?.reversed_cents) {
+          showNotice(`${money(res.reversed_cents / 100)} moving back to checking`, "You skipped this before, so it no longer counts as saved.");
+        }
       } catch (err) {
         console.warn("[SecondLook] action not saved:", err.message);
       }

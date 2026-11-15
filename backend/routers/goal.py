@@ -19,7 +19,7 @@ def get_goal(user=Depends(current_user)):
 @router.put("/goal", response_model=m.GoalResponse)
 def put_goal(body: m.GoalRequest, user=Depends(current_user)):
     """Create or update the one goal. name trimmed, 1 to 40 characters. target_cents 500 to 10000000. Else 422."""
-    user = goal_service.set_goal(user, body.name, body.target_cents, datetime.now(timezone.utc))
+    user = goal_service.set_goal(user, body.name, body.target_cents, datetime.now(timezone.utc), fresh=body.fresh)
     return goal_service.goal_out(user)
 
 

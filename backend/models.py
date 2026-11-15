@@ -1,7 +1,7 @@
 """Pydantic request and response models. FastAPI's /docs page is built from these, so they are the API contract."""
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StrictInt, StrictStr, field_validator, model_serializer, model_validator
+from pydantic import StrictBool, BaseModel, Field, StrictInt, StrictStr, field_validator, model_serializer, model_validator
 
 from backend.settings import ATTRIBUTES
 from backend.timeutil import UtcDateTime
@@ -368,12 +368,16 @@ class ActionResponse(BaseModel):
     transfer: TransferResult | None = Field(None, description="Set on skipped for Nessie users only (Part 6)")
     goal: ActionGoal | None = Field(None, description="Only on skipped, only when the user has a goal. "
                                                       "Left out of the response otherwise (section 15)")
+    reversed_cents: int | None = Field(None, description="On bought: cents an earlier skip of the same item moves "
+                                                         "back from Savings to Checking (Nessie users, background)")
 
     @model_serializer(mode="wrap")
     def _drop_absent_goal(self, handler):
         data = handler(self)
         if self.goal is None:
             data.pop("goal", None)  # "absent otherwise": the card checks for the field, not for null
+        if self.reversed_cents is None:
+            data.pop("reversed_cents", None)  # only on bought, only when an earlier skip is moved back
         return data
 
 
@@ -572,6 +576,8 @@ class ImpactResponse(BaseModel):
     co2e_kg: float = Field(description="Lifecycle kg CO2e of skipped items in categories with a sourced figure")
     co2e_items_counted: int = Field(description="How many skipped items had a sourced figure")
     co2e_sources: list[ImpactSource] = []
+    money_source: Literal["nessie", "local"] = Field(
+        "local", description="nessie: money_kept is the projected Nessie Savings balance. local: sum of skipped prices")
 
 
 # ---------- savings goal (section 15) ----------
@@ -585,6 +591,7 @@ class GoalRequest(BaseModel):
     """PUT /goal. name is trimmed, then 1 to 40 characters. target_cents is an integer (no floats, no strings)."""
     name: StrictStr
     target_cents: StrictInt = Field(ge=GOAL_TARGET_MIN_CENTS, le=GOAL_TARGET_MAX_CENTS)
+    fresh: StrictBool = Field(False, description="True starts a new goal: progress counts only savings from now on")
 
     @field_validator("name")
     @classmethod

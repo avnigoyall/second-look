@@ -28,6 +28,13 @@
       <input id="su-phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="(510) 555-0123">
     </label>
     <p class="hint small muted">Add the number you text from to send Second Look photos over iMessage. Your closet is the same in both places.</p>
+    <!-- Every new account starts with a savings goal: skips count toward it. -->
+    <fieldset class="signup-goal">
+      <legend>your savings goal</legend>
+      <label>Saving for <input id="su-goal-name" type="text" maxlength="40" autocomplete="off" placeholder="japan trip" required></label>
+      <label>Goal amount <span class="goal-money"><span aria-hidden="true">$</span><input id="su-goal-target" type="text" inputmode="decimal" autocomplete="off" placeholder="2,000" required></span></label>
+      <p class="hint small muted">Every item you skip moves its price toward this goal.</p>
+    </fieldset>
     <button type="submit" class="primary">Create account</button>
     <p class="switch small muted">Already have an account? <button type="button" id="to-login" class="link">Log in</button></p>
   </form>
@@ -54,6 +61,28 @@
       <div class="stat stat-money">
         <span class="stat-label">Money saved by skipping</span>
         <span class="stat-value" id="money-kept">$0</span>
+        <span id="money-source" class="stat-note" hidden>in your nessie savings account</span>
+      </div>
+
+      <!-- Savings goal (GET/PUT/DELETE /goal). Progress uses Nessie Savings for Nessie accounts. -->
+      <div id="goal" class="goal" hidden>
+        <button id="goal-start" type="button" class="secondary small goal-start">+ set a savings goal</button>
+        <div id="goal-view" hidden>
+          <p class="goal-line"><span id="goal-title"></span><span id="goal-pct" class="goal-pct"></span></p>
+          <div id="goal-bar" class="goal-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-labelledby="goal-title"><span id="goal-fill"></span></div>
+          <p class="goal-sub"><span id="goal-amounts"></span> <button id="goal-edit" type="button" class="link">edit</button></p>
+          <button id="goal-new" type="button" class="primary small goal-new" hidden>set a new savings goal</button>
+        </div>
+        <form id="goal-form" class="goal-form" hidden novalidate>
+          <label>Saving for <input id="goal-name" type="text" maxlength="40" autocomplete="off" placeholder="japan trip"></label>
+          <label>Goal amount <span class="goal-money"><span aria-hidden="true">$</span><input id="goal-target" type="text" inputmode="decimal" autocomplete="off" placeholder="2,000" aria-describedby="goal-msg"></span></label>
+          <p id="goal-msg" class="status error" role="alert"></p>
+          <div class="goal-actions">
+            <button type="submit" class="primary small">save goal</button>
+            <button id="goal-cancel" type="button" class="link">cancel</button>
+            <button id="goal-remove" type="button" class="link goal-remove" hidden>remove goal</button>
+          </div>
+        </form>
       </div>
       <div class="stat stat-carbon">
         <span class="stat-label"><span>Carbon emissions avoided</span> <span class="tag">Estimate</span></span>
@@ -95,6 +124,17 @@
   </main>
 
   <p id="login-status" class="status" role="status"></p>
+
+  <!-- Goal reached: confetti over the popup and a card to start the next goal (popup.js celebrate). -->
+  <div id="celebrate" class="celebrate" hidden>
+    <canvas id="confetti" aria-hidden="true"></canvas>
+    <div class="celebrate-card" role="dialog" aria-modal="true" aria-labelledby="celebrate-title">
+      <h2 id="celebrate-title">you reached your goal!</h2>
+      <p id="celebrate-text"></p>
+      <button id="celebrate-new" type="button" class="primary">set a new savings goal</button>
+      <button id="celebrate-later" type="button" class="link">not now</button>
+    </div>
+  </div>
 
   <script src="src/popup/popup.js"></script>
 </body>

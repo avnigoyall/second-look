@@ -33,7 +33,7 @@ from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_do
 from backend.services.embeddings import EmbeddingError
 from backend.services import photon_lines
 from backend.services.goal import action_goal
-from backend.services.money import money_kept, on_skip, savings_summary
+from backend.services.money import money_kept, on_buy, on_skip, savings_summary
 from backend.services.verdict import decide
 from backend.settings import ROOT
 from backend.warmup import start_warmup
@@ -223,7 +223,8 @@ def action(body: m.ActionRequest, background: BackgroundTasks, user=Depends(curr
     returns real balances plus `transfer`. A slow or failed transfer answers "pending" and retries once in the
     background. Other users keep placeholder balances and make no Nessie call.
     "bought" adds the item to the closet as incoming (Part 3), after the response, unless the user turned off
-    settings.auto_add_purchases. It makes no Nessie call.
+    settings.auto_add_purchases. When an earlier skip of the same item moved money to Savings, that skip is
+    superseded and the money moves back to Checking in the background (`reversed_cents`). No Nessie call inline.
     "goal" (section 15): only on skipped and only when the user has a goal, computed after the transfer.
     """
     doc = own_verdict(body.verdict_id, user)
@@ -233,6 +234,8 @@ def action(body: m.ActionRequest, background: BackgroundTasks, user=Depends(curr
     transfer, balances = on_skip(user, doc, background) if body.action == "skipped" else (None, None)
     out = {"ok": True, "transfer": transfer,
            "balances": m.Balances(**balances, placeholder=False) if balances else m.Balances()}
+    if body.action == "bought":
+        out["reversed_cents"] = on_buy(user, doc, background)
     if body.action == "skipped":  # section 15: bought stays free of Nessie calls, so it carries no goal
         try:
             goal = action_goal(user, transfer, balances)
@@ -328,7 +331,7 @@ def dashboard(user=Depends(current_user)):
 @app.get("/impact", response_model=m.ImpactResponse)
 def impact(user=Depends(current_user)):
     """Popup summary on non-product pages: money kept and estimated CO2e avoided by skipped items."""
-    return impact_summary(user["_id"])
+    return impact_summary(user["_id"], user)
 
 
 @app.get("/cart-summary", response_model=m.CartSummaryResponse)

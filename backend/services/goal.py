@@ -86,7 +86,10 @@ def saved_cents(user: dict, budget_s: float = nessie.CALL_TIMEOUT_S) -> tuple[in
 
 
 def progress(goal: dict, saved: int) -> dict:
+    """saved_cents counts toward this goal only: Savings minus the balance when the goal started (start_cents,
+    set for a fresh goal, 0 for older goals), so a new goal after a reached one starts at zero."""
     target = goal["target_cents"]
+    saved = max(0, saved - int(goal.get("start_cents") or 0))
     return {"name": goal["name"], "target_cents": target, "saved_cents": saved,
             "percent": min(100, saved * 100 // target), "reached": saved >= target}
 
@@ -120,12 +123,16 @@ def action_goal(user: dict, transfer: dict | None, balances: dict | None) -> dic
 
 # ---------- storage ----------
 
-def set_goal(user: dict, name: str, target_cents: int, now) -> dict:
-    """Create or update. created_at survives updates. Returns the user doc with the new goal."""
+def set_goal(user: dict, name: str, target_cents: int, now, fresh: bool = False) -> dict:
+    """Create or update. created_at and start_cents survive updates. fresh=True starts a new goal: it counts only
+    savings from now on (start_cents = the current Savings). Returns the user doc with the new goal."""
     from backend.db import users
-    old = user.get("goal") or {}
+    old = {} if fresh else (user.get("goal") or {})
+    start = saved_cents(user)[0] if fresh else int(old.get("start_cents") or 0)
     goal = {"name": name, "target_cents": target_cents, "created_at": old.get("created_at") or now,
             "updated_at": now}
+    if fresh or "start_cents" in old:  # stored only for fresh goals (and kept on their edits)
+        goal["start_cents"] = start
     users.update_one({"_id": user["_id"]}, {"$set": {"goal": goal}})
     return {**user, "goal": goal}
 
@@ -139,7 +146,7 @@ def delete_goal(user: dict) -> None:
 def skipped_items(user_id) -> list[dict]:
     """GET /goal/items: this user's skipped verdicts, newest first, at most 100. Makes no Nessie call."""
     from backend.db import verdicts
-    docs = verdicts.find({"user_id": user_id, "action": "skipped"},
+    docs = verdicts.find({"user_id": user_id, "action": "skipped", "superseded_by": None},
                          {"item.name": 1, "item.store": 1, "item.price": 1, "item.image_url": 1, "created_at": 1,
                           "transfer": 1}).sort([("created_at", -1), ("_id", -1)]).limit(ITEMS_LIMIT)
     return [item_out(d) for d in docs]

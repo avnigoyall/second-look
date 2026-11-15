@@ -259,6 +259,10 @@ const handlers = {
   },
   CHECK_ACTIVE_TAB: checkActiveTab,
   PAGE_KIND: pageKind,
+  // Savings goal (backend/routers/goal.py). saved_cents comes from Nessie Savings for Nessie users.
+  GOAL_GET: () => api("/goal"),
+  GOAL_SET: ({ name, target_cents, fresh = false }) => api("/goal", { method: "PUT", body: { name, target_cents, fresh } }),
+  GOAL_DELETE: () => api("/goal", { method: "DELETE" }),
   // "View my wardrobe" in the popup: open the closet page, already logged in (token in the URL fragment,
   // which never reaches a server; the page stores it and clears it from the address bar).
   OPEN_CLOSET: async () => {

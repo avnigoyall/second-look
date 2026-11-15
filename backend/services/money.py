@@ -8,6 +8,7 @@ Stored on the verdict: `transfer {status done|pending|failed|no_price, id, amoun
 relevant, `topup_id` and `error` (scrubbed). Nothing here ever raises to the shopper.
 """
 import logging
+from datetime import timedelta
 
 from pymongo import ReturnDocument
 
@@ -140,12 +141,117 @@ def retry_skip(verdict_id) -> None:
         _save_transfer(verdict_id, {**record, "status": "failed", "error": message, "at": nessie.now()})
 
 
+# ---------- bought later: undo an earlier skip of the same item ----------
+# A skip moved money to Savings. When the shopper buys the same item later (a new check, a new verdict), that
+# money did not stay saved: the earlier verdict is marked superseded (it leaves money_kept and the goal's local
+# sum) and, for Nessie users, a background transfer moves the same cents back from Savings to Checking.
+
+SAME_ITEM_WINDOW_DAYS = 60
+
+
+def normalize_url(url) -> str | None:
+    """Scheme, lowercase host and path without query, fragment or trailing slash: variants of one product page."""
+    from urllib.parse import urlsplit
+    if not url:
+        return None
+    parts = urlsplit(str(url).strip())
+    if not parts.netloc:
+        return None
+    return f"{parts.netloc.lower().removeprefix('www.')}{parts.path.rstrip('/')}".lower()
+
+
+def same_item(a: dict, b: dict) -> bool:
+    """Same product page, else same name at the same store (case-insensitive)."""
+    ua, ub = normalize_url(a.get("url")), normalize_url(b.get("url"))
+    if ua and ub:
+        return ua == ub
+    name_a, name_b = (a.get("name") or "").strip().lower(), (b.get("name") or "").strip().lower()
+    return bool(name_a) and name_a == name_b and (a.get("store") or "").lower() == (b.get("store") or "").lower()
+
+
+def _recent_skips(user_id, exclude_id, since) -> list[dict]:
+    from backend.db import verdicts
+    return list(verdicts.find({"user_id": user_id, "_id": {"$ne": exclude_id}, "action": "skipped",
+                               "superseded_by": None, "created_at": {"$gte": since}},
+                              {"item": 1, "transfer": 1, "created_at": 1, "user_id": 1}).sort("created_at", -1).limit(100))
+
+
+def _supersede(verdict_id, by_id) -> bool:
+    """Atomically mark a skip superseded by a later purchase. False when it already was (double Buy)."""
+    from backend.db import verdicts
+    res = verdicts.update_one({"_id": verdict_id, "superseded_by": None},
+                              {"$set": {"superseded_by": by_id, "superseded_at": nessie.now()}})
+    return res.modified_count == 1
+
+
+def _save_reversal(verdict_id, record: dict) -> None:
+    from backend.db import verdicts
+    verdicts.update_one({"_id": verdict_id}, {"$set": {"reversal": record}})
+
+
+def on_buy(user: dict, verdict: dict, background) -> int | None:
+    """Called on "bought". Finds the latest earlier skip of the same item, supersedes it and, when its money moved
+    to Nessie Savings, schedules moving it back. Returns the cents being moved back, or None. Never raises."""
+    try:
+        since = nessie.now() - timedelta(days=SAME_ITEM_WINDOW_DAYS)
+        item = verdict.get("item") or {}
+        if verdict.get("action") == "skipped":  # this very verdict was skipped first (read before the update)
+            earlier = verdict
+        else:
+            earlier = next((d for d in _recent_skips(user["_id"], verdict["_id"], since)
+                            if same_item(item, d.get("item") or {})), None)
+        if earlier is None or not _supersede(earlier["_id"], verdict["_id"]):
+            return None
+        transfer = earlier.get("transfer") or {}
+        if transfer.get("status") != "done" or not transfer.get("amount_cents") or not nessie_active(user):
+            return None
+        record = {"status": "pending", "id": None, "amount_cents": transfer["amount_cents"], "at": nessie.now(),
+                  "bought_verdict_id": verdict["_id"]}
+        _save_reversal(earlier["_id"], record)
+        background.add_task(reverse_skip, earlier["_id"])
+        return transfer["amount_cents"]
+    except Exception as e:  # the purchase itself is already recorded; money bookkeeping never fails it
+        log.warning("bought: earlier skip check failed: %s", nessie.scrub(str(e))[:200])
+        return None
+
+
+def reverse_skip(verdict_id) -> None:
+    """Background: move a superseded skip's money back to Checking. Waits for the skip transfer to settle when
+    Savings cannot spend it yet, and checks for an existing undo first, so it is never repeated."""
+    verdict = _load_verdict(verdict_id)
+    record = (verdict or {}).get("reversal") or {}
+    if not verdict or record.get("status") != "pending":
+        return
+    try:
+        user = _load_user(verdict["user_id"])
+        if not user or not nessie_active(user) or not nessie.has_accounts(user):
+            raise NessieError("user is not set up for Nessie")
+        try:
+            result = nessie.undo_transfer(user, verdict, Deadline(RETRY_BUDGET_S), check_existing=True)
+        except NessieError as e:
+            if e.problem != "insufficient_funds":
+                raise
+            skip_tx = (verdict.get("transfer") or {}).get("id")
+            if skip_tx:
+                nessie.wait_settled(skip_tx, TOPUP_WAIT_S)
+            result = nessie.undo_transfer(user, verdict, Deadline(RETRY_BUDGET_S), check_existing=True)
+        _save_reversal(verdict_id, {**record, **result})
+        from backend.services.goal import forget_savings  # lazy: goal imports this module
+        forget_savings(verdict["user_id"])
+    except Exception as e:
+        message = nessie.scrub(str(e))[:200]
+        log.warning("undo for verdict %s failed: %s", verdict_id, message)
+        _save_reversal(verdict_id, {**record, "status": "failed", "error": message, "at": nessie.now()})
+
+
 # ---------- GET /savings and /dashboard ----------
 
 def money_kept(user_id) -> float:
-    """Dollars: the sum of item.price over skipped verdicts. Stays local even when Nessie is on."""
+    """Dollars: the sum of item.price over skipped verdicts that were not bought later (superseded). Stays local
+    even when Nessie is on."""
     from backend.db import verdicts
-    result = list(verdicts.aggregate([{"$match": {"user_id": user_id, "action": "skipped"}},
+    result = list(verdicts.aggregate([{"$match": {"user_id": user_id, "action": "skipped",
+                                                  "superseded_by": None}},
                                       {"$group": {"_id": None, "total": {"$sum": "$item.price"}}}]))
     return round(result[0]["total"], 2) if result else 0.0
 
@@ -165,7 +271,8 @@ def savings_summary(user: dict) -> dict:
 
 def local_savings(user: dict) -> dict:
     from backend.db import verdicts
-    docs = verdicts.find({"user_id": user["_id"], "action": "skipped", "item.price": {"$gt": 0}},
+    docs = verdicts.find({"user_id": user["_id"], "action": "skipped", "item.price": {"$gt": 0},
+                          "superseded_by": None},
                          {"item.price": 1, "item.name": 1, "created_at": 1, "transfer": 1}).sort("created_at", -1).limit(20)
     transfers = [{"amount_cents": round(d["item"]["price"] * 100), "description": nessie.verdict_skip_description(d),
                   "at": as_utc((d.get("transfer") or {}).get("at") or d["created_at"])} for d in docs]

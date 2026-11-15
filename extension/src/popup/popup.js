@@ -121,17 +121,192 @@ function showProductTools(isProduct) {
 async function loadPageMode() {
   pageModeLoaded = true;
   loadSummary();
+  loadGoal();
   const kind = await send("PAGE_KIND").catch(() => ({ product: false }));
   showProductTools(kind.product);
 }
 
 const money = (n) => Number(n || 0).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: n % 1 ? 2 : 0 });
 
+// ---------- savings goal (GET/PUT/DELETE /goal) ----------
+// Wording and limits match dashboard/goal.js: $5 to $100,000, a name of 1 to 40 characters.
+const GOAL_MIN_CENTS = 500;
+const GOAL_MAX_CENTS = 10000000;
+let currentGoal = null;
+let removeArmed = false;
+let newGoalMode = false; // the form is starting a new goal after a reached one: it counts from zero
+
+const dollars = (cents) => money(Math.floor(cents) / 100);
+
+function renderGoal(goal) {
+  currentGoal = goal;
+  $("goal").hidden = false;
+  $("goal-form").hidden = true;
+  $("goal-start").hidden = Boolean(goal);
+  $("goal-view").hidden = !goal;
+  if (!goal) return;
+  $("goal-title").textContent = goal.reached ? "you reached your goal!" : `saving for ${goal.name}`;
+  $("goal-pct").textContent = `${goal.percent}%`;
+  $("goal-fill").style.width = `${goal.percent}%`;
+  $("goal-bar").setAttribute("aria-valuenow", String(goal.percent));
+  $("goal-bar").classList.toggle("reached", goal.reached);
+  $("goal-amounts").textContent = goal.reached
+    ? `${dollars(goal.saved_cents)} saved for ${goal.name}`
+    : `${dollars(goal.saved_cents)} of ${dollars(goal.target_cents)} saved`;
+  $("goal-edit").hidden = goal.reached;
+  $("goal-new").hidden = !goal.reached;
+  if (goal.reached) celebrateOnce(goal);
+}
+
+// ---------- goal reached: confetti once per goal ----------
+const celebratedKey = (goal) => `sl-goal-celebrated:${goal.name}|${goal.target_cents}`;
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function celebrateOnce(goal) {
+  try {
+    if (localStorage.getItem(celebratedKey(goal))) return;
+    localStorage.setItem(celebratedKey(goal), "1");
+  } catch {
+    // no storage: still celebrate this time
+  }
+  $("celebrate-text").textContent = `You saved ${dollars(goal.saved_cents)} for ${goal.name} by skipping.`;
+  $("celebrate").hidden = false;
+  $("celebrate-new").focus();
+  if (!reducedMotion()) confetti($("confetti"));
+}
+
+function closeCelebrate() {
+  $("celebrate").hidden = true;
+}
+
+// A short burst of falling paper in the popup's browns and beiges. Pointer events pass through.
+function confetti(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = (canvas.width = window.innerWidth * dpr);
+  const h = (canvas.height = window.innerHeight * dpr);
+  const ctx = canvas.getContext("2d");
+  const colors = ["#6b4a2f", "#a47551", "#d8c3a5", "#c9a227", "#7a8450", "#efe6d8"];
+  const pieces = Array.from({ length: 140 }, () => ({
+    x: w / 2 + (Math.random() - 0.5) * w * 0.3,
+    y: h * 0.35,
+    vx: (Math.random() - 0.5) * 14 * dpr,
+    vy: (-Math.random() * 12 - 4) * dpr,
+    size: (4 + Math.random() * 5) * dpr,
+    turn: Math.random() * Math.PI,
+    spin: (Math.random() - 0.5) * 0.3,
+    color: colors[Math.floor(Math.random() * colors.length)],
+  }));
+  const start = performance.now();
+  const DURATION = 2600;
+  function frame(now) {
+    const t = now - start;
+    ctx.clearRect(0, 0, w, h);
+    ctx.globalAlpha = Math.max(0, 1 - Math.max(0, t - DURATION + 700) / 700);
+    for (const p of pieces) {
+      p.vy += 0.35 * dpr;
+      p.vx *= 0.99;
+      p.x += p.vx;
+      p.y += p.vy;
+      p.turn += p.spin;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.turn);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+      ctx.restore();
+    }
+    if (t < DURATION) requestAnimationFrame(frame);
+    else ctx.clearRect(0, 0, w, h);
+  }
+  requestAnimationFrame(frame);
+}
+
+function startNewGoal() {
+  closeCelebrate();
+  openGoalForm({ fresh: true });
+}
+$("goal-new").addEventListener("click", startNewGoal);
+$("celebrate-new").addEventListener("click", startNewGoal);
+$("celebrate-later").addEventListener("click", closeCelebrate);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("celebrate").hidden) closeCelebrate();
+});
+
+async function loadGoal() {
+  try {
+    const { goal } = await send("GOAL_GET");
+    renderGoal(goal);
+  } catch {
+    $("goal").hidden = true; // the goal is extra: never an error on the dashboard
+  }
+}
+
+function openGoalForm({ fresh = false } = {}) {
+  removeArmed = false;
+  newGoalMode = fresh;
+  const editing = fresh ? null : currentGoal;
+  $("goal-start").hidden = true;
+  $("goal-view").hidden = true;
+  $("goal-form").hidden = false;
+  $("goal-name").value = editing?.name || "";
+  $("goal-target").value = editing ? String(editing.target_cents / 100) : "";
+  $("goal-remove").hidden = !editing;
+  $("goal-remove").textContent = "remove goal";
+  setStatus("goal-msg", "");
+  $("goal-name").focus();
+}
+
+function parseTarget(text) {
+  const n = Number(String(text).replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : null;
+}
+
+$("goal-start").addEventListener("click", () => openGoalForm());
+$("goal-edit").addEventListener("click", () => openGoalForm());
+$("goal-cancel").addEventListener("click", () => renderGoal(currentGoal));
+
+$("goal-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("goal-name").value.trim();
+  const target = parseTarget($("goal-target").value);
+  if (!name) return setStatus("goal-msg", "Give your goal a name.", true);
+  if (target == null || target < GOAL_MIN_CENTS || target > GOAL_MAX_CENTS) {
+    return setStatus("goal-msg", "Enter an amount from $5 to $100,000.", true);
+  }
+  const button = e.submitter;
+  if (button) button.disabled = true;
+  try {
+    const { goal } = await send("GOAL_SET", { name, target_cents: target, fresh: newGoalMode });
+    newGoalMode = false;
+    renderGoal(goal);
+  } catch (err) {
+    setStatus("goal-msg", err.message, true);
+  } finally {
+    if (button) button.disabled = false;
+  }
+});
+
+// Remove asks once more in place: your skips and savings stay either way.
+$("goal-remove").addEventListener("click", async () => {
+  if (!removeArmed) {
+    removeArmed = true;
+    $("goal-remove").textContent = "sure? remove (skips and savings stay)";
+    return;
+  }
+  try {
+    await send("GOAL_DELETE");
+    renderGoal(null);
+  } catch (err) {
+    setStatus("goal-msg", err.message, true);
+  }
+});
+
 async function loadSummary() {
   $("summary").classList.add("loading");
   try {
     const data = await send("IMPACT");
     $("money-kept").textContent = money(data.money_kept);
+    $("money-source").hidden = data.money_source !== "nessie"; // the tile shows the real Savings balance
     const sub = document.createElement("sub");
     sub.textContent = "2";
     $("co2e").replaceChildren(`${Number(data.co2e_kg).toLocaleString("en-US", { maximumFractionDigits: 1 })} kg CO`, sub, "e");
@@ -192,6 +367,13 @@ $("login-view").addEventListener("submit", async (e) => {
 
 $("signup-view").addEventListener("submit", async (e) => {
   e.preventDefault();
+  // The savings goal is part of signing up: check it before the account exists.
+  const goalName = $("su-goal-name").value.trim();
+  const goalTarget = parseTarget($("su-goal-target").value);
+  if (!goalName) return setStatus("login-status", "Give your savings goal a name.", true);
+  if (goalTarget == null || goalTarget < GOAL_MIN_CENTS || goalTarget > GOAL_MAX_CENTS) {
+    return setStatus("login-status", "Enter a goal amount from $5 to $100,000.", true);
+  }
   const button = e.submitter;
   button.disabled = true;
   setStatus("login-status", "Creating your account...");
@@ -202,10 +384,16 @@ $("signup-view").addEventListener("submit", async (e) => {
       phone: $("su-phone").value.trim() || null,
     });
     $("su-password").value = "";
+    let goalSaved = true;
+    try {
+      await send("GOAL_SET", { name: goalName, target_cents: goalTarget, fresh: true });
+    } catch {
+      goalSaved = false; // the account exists; the goal can be set from the dashboard
+    }
     authMode = "login";
     render({ loggedIn: true, email, phone });
     setStatus("login-status", "");
-    setStatus("status", "Account created.");
+    setStatus("status", goalSaved ? `Account created. Saving for ${goalName}.` : "Account created. Set your savings goal below.", !goalSaved);
   } catch (err) {
     setStatus("login-status", err.message, true);
   } finally {

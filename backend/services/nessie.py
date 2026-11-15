@@ -116,6 +116,16 @@ def is_skip_for(description, verdict_id) -> bool:
         or text == f"Second Look skip {verdict_id}"
 
 
+def undo_description(verdict_id, item_name=None) -> str:
+    """The reverse of a skip, for an item bought later: "Second Look undo: <name> [<skipped verdict id>]"."""
+    return f"Second Look undo: {description_name(item_name)} [{verdict_id}]"
+
+
+def is_undo_for(description, verdict_id) -> bool:
+    text = description or ""
+    return text.startswith("Second Look undo") and text.endswith(f"[{verdict_id}]")
+
+
 def topup_description(verdict_id) -> str:
     return f"Second Look top-up {verdict_id}"
 
@@ -325,6 +335,31 @@ def skip_transfer(user: dict, verdict: dict, deadline: Deadline | None = None, c
         if e.problem == "insufficient_funds":  # funds moved between the read and the transfer
             raise TopUpPending(top_up(checking, verdict["_id"], cents, deadline))
         raise
+    try:
+        settle_early(tx["id"], deadline.timeout())
+    except NessieTimeout:
+        pass
+    return {"status": "done", "id": tx["id"], "amount_cents": cents, "at": now()}
+
+
+def undo_transfer(user: dict, skipped: dict, deadline: Deadline | None = None, check_existing: bool = False) -> dict:
+    """Move a skip's money back from Savings to Checking (the item was bought later). Returns
+    {status: "done", id, amount_cents, at}. Raises NessieError with problem "insufficient_funds" while the skip
+    transfer is still settling into Savings, NessieTimeout (may have landed) or NessieError.
+    check_existing looks for an earlier undo for this verdict id in Savings first, so a retry never repeats it.
+    """
+    deadline = deadline or Deadline(CALL_TIMEOUT_S)
+    cents = (skipped.get("transfer") or {}).get("amount_cents")
+    if not cents:
+        raise NessieError("the skip has no amount to move back")
+    checking, savings = user["nessie_checking_id"], user["nessie_savings_id"]
+    if check_existing:
+        found = find_transaction(savings, lambda d: is_undo_for(d, skipped["_id"]), timeout=deadline.timeout())
+        if found:
+            return {"status": "done", "id": found["id"], "amount_cents": cents, "at": now()}
+    description = undo_description(skipped["_id"], (skipped.get("item") or {}).get("name"))
+    tx = request("POST", f"/accounts/{savings}/transfers",
+                 {"payee_id": checking, "amount_cents": cents, "description": description}, timeout=deadline.timeout())
     try:
         settle_early(tx["id"], deadline.timeout())
     except NessieTimeout:

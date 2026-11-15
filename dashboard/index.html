@@ -80,6 +80,11 @@
   .badge { border-radius: 999px; text-transform: lowercase; letter-spacing: 0; font-size: 12px; }
   li .name { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; }
   .goal button.goal-btn { border-radius: 999px; } /* goal.css widget follows the pill buttons */
+  .bank { margin-top: 16px; display: grid; gap: 14px; }
+  .bank-balances { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .bank-balances > div { display: grid; gap: 2px; }
+  .bank-amount { font-size: 28px; font-weight: 800; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  #bank-transfers:empty { display: none; }
 </style>
 </head>
 <body>
@@ -103,6 +108,15 @@
       <p class="stat-label">Money kept by skipping</p>
       <p class="stat" id="money-kept">$0.00</p>
       <p class="muted" id="who"></p>
+    </div>
+    <!-- Nessie accounts (GET /savings, source "nessie" only): balances and recent skip transfers -->
+    <div id="bank" class="card bank" hidden>
+      <p class="stat-label">your nessie accounts</p>
+      <div class="bank-balances">
+        <div><span class="stat-label">checking</span><span class="bank-amount" id="bank-checking"></span></div>
+        <div><span class="stat-label">savings</span><span class="bank-amount" id="bank-savings"></span></div>
+      </div>
+      <ul id="bank-transfers"></ul>
     </div>
     <h2>Recent verdicts</h2>
     <div class="card">
@@ -167,6 +181,31 @@
     }
   }
 
+  // "Second Look skip: Wide-leg jeans [<verdict id>]" -> "Wide-leg jeans"
+  const transferName = (d) => String(d || "").replace(/^Second Look skip:?\s*/, "").replace(/\s*\[[^\]]*\]\s*$/, "") || "Skipped item";
+
+  // Nessie accounts card: only for Nessie users. Never shows an error; the money card above stays.
+  async function loadBank() {
+    try {
+      const s = await api("/savings");
+      if (s.source !== "nessie") { $("bank").hidden = true; return; }
+      $("bank-checking").textContent = s.checking_cents == null ? "unavailable" : money(s.checking_cents / 100);
+      $("bank-savings").textContent = money(s.savings_cents / 100);
+      $("bank-transfers").replaceChildren(...(s.transfers || []).slice(0, 5).map((t) => {
+        const li = document.createElement("li");
+        const name = Object.assign(document.createElement("span"), { className: "name", textContent: transferName(t.description) });
+        const amount = Object.assign(document.createElement("span"), { className: "price", textContent: "+" + money(t.amount_cents / 100) });
+        const when = Object.assign(document.createElement("span"), { className: "meta",
+          textContent: "moved to savings " + new Date(t.at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) });
+        li.append(name, amount, when);
+        return li;
+      }));
+      $("bank").hidden = false;
+    } catch {
+      $("bank").hidden = true;
+    }
+  }
+
   async function loadDashboard() {
     try {
       const [{ user }, data] = await Promise.all([api("/auth/me"), api("/dashboard")]);
@@ -175,6 +214,7 @@
       renderVerdicts(data.verdicts);
       $("dash-error").hidden = true;
       show("dash");
+      loadBank();
     } catch (e) {
       if (e.status === 401) { setToken(null); show("login"); return; }
       show("dash");
