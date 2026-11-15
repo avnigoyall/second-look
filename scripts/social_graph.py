@@ -355,6 +355,13 @@ def main():
     output = export_graph(graph, groups, names, interaction_stats,
                           similarity_evaluated=not args.interaction_only)
     named_count = count_named_communities(groups, names, cached_names)
+    edge_kinds = Counter(data["kind"] for _, _, data in graph.edges(data=True))
+    output["stats"].update({
+        # Full-graph totals, before the 1500-node browser export.
+        "full_graph_nodes": graph.number_of_nodes(), "full_graph_edges": graph.number_of_edges(),
+        "full_graph_interaction_edges": sum(n for k, n in edge_kinds.items() if k != "similarity"),
+        "full_graph_similarity_edges": edge_kinds.get("similarity", 0),
+        "full_graph_edges_by_kind": dict(sorted(edge_kinds.items()))})
     output["stats"].update({"neighbor_queries": queries, "naming_calls": calls,
                              "community_count": len(groups), "computed_at": run_id,
                              "named_community_count": named_count,
