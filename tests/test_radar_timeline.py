@@ -17,7 +17,24 @@ from test_micro_trend import doc, micro
 from backend import main
 from backend.services import radar_read, social_ask
 
-LOCAL = os.getenv("MONGODB_URI", "mongodb://127.0.0.1:27017")
+LOCAL = "mongodb://127.0.0.1:27017"  # always local: never create test databases in the .env database
+
+
+def _client():
+    try:
+        c = MongoClient(LOCAL, serverSelectionTimeoutMS=2000, tz_aware=True)
+        c.server_info()
+        return c
+    except Exception:  # noqa: BLE001
+        return None
+
+
+CLIENT = _client()
+
+
+def tearDownModule():
+    if CLIENT is not None:
+        CLIENT.close()
 STAPLE = [40] * 40
 
 
@@ -29,16 +46,18 @@ def decision(style, run_id, created_at, **changes):
             "created_at": created_at, **changes}
 
 
+@unittest.skipIf(CLIENT is None, "local MongoDB not running")
 class TimelineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.mongo = MongoClient(LOCAL, serverSelectionTimeoutMS=2000, tz_aware=True)
+        cls.mongo = CLIENT
         cls.db = cls.mongo[f"radar_timeline_test_{os.getpid()}"]
 
     @classmethod
     def tearDownClass(cls):
-        cls.mongo.drop_database(cls.db.name)
-        cls.mongo.close()
+        # Drop the collections, not the database: works for users without the dropDatabase role.
+        for name in cls.db.list_collection_names():
+            cls.db.drop_collection(name)
 
     def setUp(self):
         self.db["social_trends"].delete_many({})
