@@ -281,7 +281,7 @@
     renderer.on("afterRender", drawOverlay);
     renderer.on("enterNode", ({ node, event }) => { state.hovered = node; applyFocus(); showTooltip(node, event); });
     renderer.on("leaveNode", () => { state.hovered = null; applyFocus(); $("tooltip").hidden = true; });
-    renderer.on("clickNode", ({ node }) => clickNode(node));
+    renderer.on("clickNode", ({ node }) => select(node, { animate: true, keepZoom: true }));
     renderer.on("clickStage", () => clearSelection());
     state.renderer = renderer;
     state.graph = g;
@@ -293,7 +293,6 @@
   // ---------- overlay: glows under the WebGL canvas, haloed labels above it ----------
 
   const SERIF = '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif';
-  const styleLabelSize = (a) => (a.size > 14 ? 14 : 13);
   const overlay = { glow: null, labels: null };
 
   function overlayCanvas(id, z) {
@@ -357,7 +356,7 @@
     graph.forEachNode((node, a) => {
       const st = renderer.getNodeState(node);
       if (!nodeVisible(a) && node !== state.selected) return;
-      if (node === state.selected || node === state.compare?.b) return add(node, a, 0);
+      if (node === state.selected) return add(node, a, 0);
       if (node === state.hovered) return add(node, a, 1);
       if (focus) {
         if (!st.lit) return;
@@ -371,13 +370,6 @@
     });
     candidates.sort((x, y) => x.priority - y.priority);
     const placed = [];
-    // Keep canvas labels out from under the page's own text and panels.
-    for (const id of ["masthead", "controls", "inspector", "reset"]) {
-      const el = id === "masthead" ? document.querySelector(".masthead") : id === "controls" ? document.querySelector(".controls") : $(id);
-      if (!el || el.hidden) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width && r.height) placed.push({ x: r.left - 6, y: r.top - 6, w: r.width + 12, h: r.height + 12 });
-    }
     // Style nodes reserve their own disc so no label is drawn over them.
     graph.forEachNode((node, a) => {
       if (a.kind !== "style" || (focus && !renderer.getNodeState(node).lit)) return;
@@ -391,7 +383,7 @@
       const p = screenNode(node);
       if (!onScreen(p)) continue;
       const strong = priority < 2 || a.kind === "style" || a.anchor === "major";
-      const size = node === state.selected || node === state.compare?.b ? 15 : a.kind === "style" ? styleLabelSize(a) : a.anchor ? (a.anchor === "major" ? 12.5 : 12) : 11.5;
+      const size = node === state.selected ? 17 : a.kind === "style" ? (a.size > 14 ? 16 : 14.5) : a.anchor ? 14 : 12.5;
       labels.font = `${a.kind === "author" ? "500 " : ""}${size}px ${a.kind === "author" ? "-apple-system, system-ui, sans-serif" : SERIF}`;
       const text = a.label;
       const width = labels.measureText(text).width;
@@ -426,7 +418,7 @@
     }
 
     // Rings mark the hovered and selected nodes.
-    for (const node of [state.hovered, state.selected, state.compare?.b]) {
+    for (const node of [state.hovered, state.selected]) {
       if (!node || !graph.hasNode(node)) continue;
       const p = screenNode(node);
       if (!onScreen(p)) continue;
@@ -441,22 +433,6 @@
     if (!renderer) return;
     const anchor = state.hovered || state.selected;
     const lit = new Set();
-    if (state.compare && !state.hovered) {
-      const { a, b, path, shared } = state.compare;
-      [a, b, ...path, ...shared].forEach((node) => lit.add(node));
-      const litEdges = new Set();
-      for (let i = 0; i + 1 < path.length; i++) graph.forEachEdge(path[i], path[i + 1], (edge) => litEdges.add(edge));
-      shared.forEach((node) => {
-        graph.forEachEdge(a, node, (edge) => litEdges.add(edge));
-        graph.forEachEdge(b, node, (edge) => litEdges.add(edge));
-      });
-      graph.forEachNode((node) => renderer.setNodeState(node, { lit: lit.has(node), selected: node === a || node === b }));
-      graph.forEachEdge((edge, attrs) => renderer.setEdgeState(edge, { lit: litEdges.has(edge) && !state.hiddenKinds.has(attrs.kind) }));
-      renderer.setGraphState({ focus: true });
-      renderer.refresh({ skipIndexation: true });
-      return;
-    }
-    if (state.compare) { lit.add(state.compare.a); lit.add(state.compare.b); }
     if (anchor && graph.hasNode(anchor)) {
       lit.add(anchor);
       graph.forEachEdge(anchor, (edge, attrs, source, target) => {
@@ -464,8 +440,7 @@
         lit.add(source); lit.add(target);
       });
     }
-    graph.forEachNode((node) => renderer.setNodeState(node, { lit: lit.has(node),
-      selected: node === state.selected || node === state.compare?.b }));
+    graph.forEachNode((node) => renderer.setNodeState(node, { lit: lit.has(node), selected: node === state.selected }));
     graph.forEachEdge((edge, attrs, source, target) => {
       renderer.setEdgeState(edge, { lit: !!anchor && (source === anchor || target === anchor) });
     });
@@ -531,7 +506,7 @@
     const measure = document.createElement("canvas").getContext("2d");
     const boxes = styles.map(({ node, a }) => {
       // Same font as drawOverlay, plus the halo and a little air.
-      measure.font = `${styleLabelSize(a)}px ${SERIF}`;
+      measure.font = `${a.size > 14 ? 16 : 14.5}px ${SERIF}`;
       const textWidth = measure.measureText(a.label).width;
       return { node, x: a.x, y: a.y, w: (a.size + 7 + textWidth + 14) * unitsPerPx, h: 24 * unitsPerPx, r: a.size * unitsPerPx };
     });
@@ -567,7 +542,7 @@
     g.forEachNode((node, a) => {
       if (a.kind !== "style") return;
       const r = renderer.scaleSize(a.size);
-      measure.font = `${styleLabelSize(a)}px ${SERIF}`;
+      measure.font = `${a.size > 14 ? 16 : 14.5}px ${SERIF}`;
       const w = measure.measureText(a.label).width;
       // Clear zone: the node disc plus its label to the right, in graph units.
       items.push({ node, x: a.x, y: a.y, left: (r + 6) * unitsPerPx, right: (r + 7 + w + 8) * unitsPerPx,
@@ -670,85 +645,13 @@
 
   // ---------- selection + inspector ----------
 
-  // One click opens a node. A click on a second node compares the two; a third replaces the second.
-  function clickNode(node) {
-    if (state.compare) {
-      if (node === state.compare.a || node === state.compare.b) return select(node, { animate: true, keepZoom: true });
-      return compare(state.compare.a, node);
-    }
-    if (state.selected && state.selected !== node) return compare(state.selected, node);
-    select(node, { animate: true, keepZoom: true });
-  }
-
   function select(node, { animate, keepZoom = false }) {
     const a = state.graph.getNodeAttributes(node);
-    state.compare = null;
     state.selected = node;
     state.selection = { kind: a.kind, ref: a.ref };
     applyFocus();
     renderInspector(a);
     if (animate) focusCamera(node, keepZoom ? null : (a.kind === "author" ? neighborhoodRatio(node) : 0.45));
-  }
-
-  // Shortest route over edges visible in this view (breadth-first, at most six steps).
-  function shortestPath(from, to) {
-    const { graph } = state;
-    const usable = (attrs) => !state.hiddenKinds.has(attrs.kind);
-    const previous = new Map([[from, null]]);
-    let frontier = [from];
-    for (let depth = 0; depth < 6 && frontier.length && !previous.has(to); depth++) {
-      const next = [];
-      for (const node of frontier) {
-        graph.forEachEdge(node, (_e, attrs, source, target) => {
-          if (!usable(attrs)) return;
-          const other = source === node ? target : source;
-          if (previous.has(other)) return;
-          previous.set(other, node);
-          next.push(other);
-        });
-      }
-      frontier = next;
-    }
-    if (!previous.has(to)) return [];
-    const path = [];
-    for (let node = to; node !== null; node = previous.get(node)) path.unshift(node);
-    return path;
-  }
-
-  function neighborsOf(node) {
-    const out = new Set();
-    state.graph.forEachEdge(node, (_e, attrs, source, target) => {
-      if (!state.hiddenKinds.has(attrs.kind)) out.add(source === node ? target : source);
-    });
-    out.delete(node);
-    return out;
-  }
-
-  function compare(a, b) {
-    const path = shortestPath(a, b);
-    const na = neighborsOf(a), nb = neighborsOf(b);
-    // The shared neighbors with the most links to the pair, so the view stays readable.
-    const weight = (x, node) => { let w = 0; state.graph.forEachEdge(x, node, () => { w += 1; }); return w; };
-    const shared = [...na].filter((node) => nb.has(node) && node !== a && node !== b)
-      .sort((x, y) => (weight(a, y) + weight(b, y)) - (weight(a, x) + weight(b, x)) || (x < y ? -1 : 1))
-      .slice(0, 12);
-    state.compare = { a, b, path, shared };
-    state.selected = a;
-    state.selection = { kind: state.graph.getNodeAttribute(a, "kind"), ref: state.graph.getNodeAttribute(a, "ref") };
-    applyFocus();
-    renderCompare();
-    frameNodes([a, b, ...path, ...shared]);
-  }
-
-  // Fit several nodes in the part of the canvas the inspector leaves visible.
-  function frameNodes(nodes) {
-    const { renderer } = state;
-    const points = nodes.map((node) => renderer.getNodeDisplayData(node)).filter(Boolean);
-    if (!points.length) return;
-    const xs = points.map((p) => p.x), ys = points.map((p) => p.y);
-    const center = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
-    const span = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-    focusCamera(null, Math.min(1, Math.max(0.1, span * 1.9)), center);
   }
 
   // Zoom so a node's visible neighbors fit on screen (authors often link across communities).
@@ -766,10 +669,10 @@
   }
 
   // Center a node in the part of the canvas the inspector does not cover.
-  function focusCamera(node, ratio, point = null) {
+  function focusCamera(node, ratio) {
     const { renderer } = state;
     const camera = renderer.getCamera();
-    const d = point || renderer.getNodeDisplayData(node);
+    const d = renderer.getNodeDisplayData(node);
     if (!d) return;
     const current = camera.getState();
     const target = { ...current, ratio: ratio ?? current.ratio };
@@ -795,7 +698,6 @@
   }
 
   function clearSelection() {
-    state.compare = null;
     state.selected = null;
     state.selection = null;
     $("inspector").hidden = true;
@@ -804,155 +706,11 @@
 
   function renderInspector(a) {
     const panel = $("detail");
-    $("compare-hint").hidden = false;
     if (a.kind === "style") panel.innerHTML = styleDetail(state.atlas.styles[a.ref]);
     else if (a.kind === "community") panel.innerHTML = communityDetail(state.atlas.communities[a.ref]);
     else { panel.innerHTML = authorDetail(a.ref, null); loadAuthor(a.ref); }
     $("inspector").hidden = false;
     $("inspector").scrollTop = 0;
-  }
-
-  // ---------- comparison ----------
-
-  const KIND_CODE = { style: "s", community: "c", author: "a" };
-
-  function nodeInfo(node) {
-    const a = state.graph.getNodeAttributes(node);
-    const A = state.atlas;
-    if (a.kind === "style") {
-      const s = A.styles[a.ref];
-      return { node, kind: "style", ref: a.ref, name: s.term, color: s.color, label: `${FAMILIES.find((f) => f.key === s.family).name} style`, data: s };
-    }
-    if (a.kind === "community") {
-      const c = A.communities[a.ref];
-      return { node, kind: "community", ref: a.ref, name: c.name, color: c.color, label: "Community", data: c };
-    }
-    const c = A.communities[A.authors.community[a.ref]];
-    return { node, kind: "author", ref: a.ref, name: `Author ${A.authors.hash[a.ref]}`, color: c.color, label: "Author", data: null };
-  }
-
-  const plural = (count, one, many) => `${n(count)} ${count === 1 ? one : many}`;
-  const KIND_WORDS = { reply: ["reply", "replies"], quote: ["quote", "quotes"], mention: ["mention", "mentions"], similarity: ["similar-post link", "similar-post links"] };
-  const kindsText = (kinds) => Object.entries(kinds || {}).filter(([, v]) => v)
-    .map(([k, v]) => plural(v, ...(KIND_WORDS[k] || [k, k]))).join(", ");
-
-  function routeHtml(path) {
-    if (!path.length) return `<p class="route-none">No route within six steps in this view${state.hiddenKinds.has("similarity") && state.view === "authors" ? ". Switch on similar posts to search inferred links too" : ""}.</p>`;
-    if (path.length === 2) return `<p class="route-direct">Directly connected.</p>`;
-    return `<ol class="route">${path.map((node) => {
-      const info = nodeInfo(node);
-      return `<li><button class="route-step" data-action="${info.kind}:${info.ref}"><span class="swatch" style="background:${info.color}"></span>${esc(info.name)}</button></li>`;
-    }).join("")}</ol><p class="route-note">${plural(path.length - 1, "step", "steps")} apart. Each step is a link shown on the graph.</p>`;
-  }
-
-  function sideBySide(A, B) {
-    if (A.kind !== B.kind || A.kind === "author") return "";
-    const rows = A.kind === "style"
-      ? [["Posts", n(A.data.posts), n(B.data.posts)], ["Authors", n(A.data.authors), n(B.data.authors)],
-         ["First post", day(A.data.first_post), day(B.data.first_post)],
-         ["Weeks with posts", `${A.data.weeks_with_posts}`, `${B.data.weeks_with_posts}`],
-         ["Communities with 3+ posts", n(A.data.breadth), n(B.data.breadth)]]
-      : [["Authors", n(A.data.authors), n(B.data.authors)], ["Posts", n(A.data.posts), n(B.data.posts)],
-         ["Replies inside", n(A.data.internal_edges?.reply || 0), n(B.data.internal_edges?.reply || 0)]];
-    return `<table class="versus"><thead><tr><th></th><th>${esc(A.name)}</th><th>${esc(B.name)}</th></tr></thead>
-      <tbody>${rows.map(([label, x, y]) => `<tr><th scope="row">${esc(label)}</th><td>${x}</td><td>${y}</td></tr>`).join("")}</tbody></table>`;
-  }
-
-  // What the pair shares, computed from the atlas already in the page.
-  function sharedHtml(A, B) {
-    const atlas = state.atlas;
-    if (A.kind === "style" && B.kind === "style") {
-      const inA = new Map(atlas.style_community.filter(([s]) => s === A.ref).map(([, c, k]) => [c, k]));
-      const both = atlas.style_community.filter(([s, c]) => s === B.ref && inA.has(c))
-        .map(([, c, k]) => ({ c, a: inA.get(c), b: k })).sort((x, y) => (y.a + y.b) - (x.a + x.b)).slice(0, 8);
-      if (!both.length) return "";
-      return `<h3 class="section-title">Communities talking about both</h3>${bars(both.map(({ c, a, b }) => ({
-        label: atlas.communities[c].name, value: `${n(a)} and ${n(b)} posts`, color: atlas.communities[c].color, action: `community:${c}` })))}`;
-    }
-    if (A.kind === "community" && B.kind === "community") {
-      const inA = new Map(A.data.top_styles);
-      const both = B.data.top_styles.filter(([s]) => inA.has(s)).map(([s, k]) => ({ s, a: inA.get(s), b: k }));
-      if (!both.length) return "";
-      return `<h3 class="section-title">Styles both communities post about</h3>${bars(both.map(({ s, a, b }) => ({
-        label: atlas.styles[s].term, value: `${n(a)} and ${n(b)} posts`, color: atlas.styles[s].color, action: `style:${s}` })))}`;
-    }
-    return "";
-  }
-
-  function examplesHtml(rows, title) {
-    if (!rows?.length) return "";
-    const A = state.atlas.authors;
-    return `<h3 class="section-title">${esc(title)}</h3><ul class="posts">${rows.map((p) => `
-      <li>${p.kind ? `<p class="post-kind">${esc((KIND_WORDS[p.kind] || [p.kind])[0].replace(/^./, (c) => c.toUpperCase()))} from <button class="inline-link" data-action="author:${p.from_author}">Author ${esc(A.hash[p.from_author])}</button></p>` : ""}
-        <p>${esc(p.snippet)}</p>
-        <span class="meta"><span>${esc(day(p.created_at))}</span><span>${n(p.likes)} ${p.likes === 1 ? "like" : "likes"}</span>
-        <a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">Open on Bluesky</a></span></li>`).join("")}</ul>`;
-  }
-
-  // Facts about the link itself, from the connection endpoint plus the page's edge data.
-  function linkSummary(A, B, link) {
-    const atlas = state.atlas;
-    const facts = [];
-    if (A.kind === "style" && B.kind === "style") {
-      facts.push(fact("Posts tagged with both", n(link?.shared_posts || 0)));
-      facts.push(fact("Authors posting about both", n(link?.shared_authors || 0)));
-    } else if (A.kind !== B.kind && [A.kind, B.kind].includes("style") && [A.kind, B.kind].includes("community")) {
-      const style = A.kind === "style" ? A : B, community = A.kind === "community" ? A : B;
-      const count = link?.posts || 0;
-      facts.push(fact(`Posts about ${style.name}`, n(count)));
-      facts.push(fact("Share of the community's posts", community.data.posts ? `${Math.round((count / community.data.posts) * 100)}%` : "n/a"));
-    } else if (A.kind === "community" && B.kind === "community") {
-      const [x, y] = [A.ref, B.ref].sort((p, q) => p - q);
-      const row = atlas.community_links.find(([p, q]) => p === x && q === y);
-      const kinds = row ? row[2] : {};
-      facts.push(fact("Replies, quotes, mentions", n((kinds.reply || 0) + (kinds.quote || 0) + (kinds.mention || 0))));
-      facts.push(fact("Similar-post links", n(kinds.similarity || 0)));
-    } else if (A.kind === "author" && B.kind === "author") {
-      const direct = authorConnections(A.ref).filter(([j]) => j === B.ref);
-      const byKind = {};
-      direct.forEach(([, k]) => { byKind[k] = (byKind[k] || 0) + 1; });
-      facts.push(fact("Direct links", direct.length ? kindsText(byKind) : "None"));
-      const sameCommunity = atlas.authors.community[A.ref] === atlas.authors.community[B.ref];
-      facts.push(fact("Community", sameCommunity ? "Same community" : "Different communities"));
-    } else {
-      const author = A.kind === "author" ? A : B, community = A.kind === "community" ? A : B;
-      const inside = atlas.authors.community[author.ref] === community.ref;
-      const links = authorConnections(author.ref).filter(([j, k]) => atlas.authors.community[j] === community.ref && !state.hiddenKinds.has(k));
-      facts.push(fact("Member", inside ? "Yes" : "No"));
-      facts.push(fact("Links to its members", n(links.length)));
-    }
-    return `<dl class="facts">${facts.join("")}</dl>`;
-  }
-
-  async function renderCompare() {
-    const { a, b, path } = state.compare;
-    const A = nodeInfo(a), B = nodeInfo(b);
-    const chip = (info) => `<button class="compare-node" data-action="${info.kind}:${info.ref}">
-        <span class="detail-kind"><span class="swatch" style="background:${info.color}"></span>${esc(info.label)}</span>
-        <span class="compare-name">${esc(info.name)}</span></button>`;
-    const head = `<p class="detail-kind">Comparing two nodes</p>
-      <div class="compare-pair">${chip(A)}<span class="compare-and" aria-hidden="true"></span>${chip(B)}</div>
-      <h3 class="section-title">How they connect</h3>${routeHtml(path)}`;
-    $("compare-hint").hidden = true;
-    $("detail").innerHTML = `${head}<div id="compare-body"><p class="empty">Loading what links them</p></div>`;
-    $("inspector").hidden = false;
-    $("inspector").scrollTop = 0;
-    const key = `${KIND_CODE[A.kind]}${A.ref}/${KIND_CODE[B.kind]}${B.ref}`;
-    let link = null;
-    try {
-      const response = await fetch(`/social-atlas/connection/${key}`);
-      link = response.ok ? await response.json() : null;
-    } catch {
-      link = null;
-    }
-    if (state.compare?.a !== a || state.compare?.b !== b) return;
-    const title = A.kind === "style" && B.kind === "style" ? "Posts that mention both"
-      : [A.kind, B.kind].includes("style") ? "Posts from this community about the style"
-      : "Posts that connect them";
-    const kindsLine = link?.kinds ? `<p class="detail-lede">Observed between them: ${esc(kindsText(link.kinds))}.</p>` : "";
-    $("compare-body").innerHTML = `${linkSummary(A, B, link)}${kindsLine}${sideBySide(A, B)}${sharedHtml(A, B)}
-      ${examplesHtml(link?.examples, title) || `<p class="empty">No posts in the sample link these two directly.</p>`}
-      <p class="note">Click either name above to open it on its own, or click another node to compare it with ${esc(A.name)}.</p>`;
   }
 
   const kindLine = (label, color) => `<p class="detail-kind"><span class="swatch" style="background:${color}"></span>${esc(label)}</p>`;

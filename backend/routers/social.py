@@ -108,27 +108,3 @@ def social_atlas_author(prefix: str):
     if row is None:
         raise HTTPException(404, "No sampled posts for this author")
     return row
-
-
-ATLAS_CONNECTIONS_PATH = ATLAS_PATH.with_name("social_atlas_connections.json")
-_ATLAS_CONNECTIONS: dict = {"mtime": None, "rows": {}}
-_NODE = re.compile(r"([sca])(\d{1,6})")
-
-
-@router.get("/social-atlas/connection/{first}/{second}")
-def social_atlas_connection(first: str, second: str):
-    """What links two atlas nodes (s=style, c=community, a=author index), with sanitized example posts.
-
-    Returns an empty connection when the sample holds no shared posts or interactions.
-    """
-    nodes = [_NODE.fullmatch(first), _NODE.fullmatch(second)]
-    if not all(nodes) or first == second:
-        raise HTTPException(422, "Nodes look like s3, c12 or a4051, and must differ")
-    order = {"s": 0, "c": 1, "a": 2}
-    a, b = sorted(((m.group(1), int(m.group(2))) for m in nodes), key=lambda v: (order[v[0]], v[1]))
-    if not ATLAS_CONNECTIONS_PATH.is_file():
-        raise HTTPException(404, "Run scripts/social_atlas.py to build the atlas")
-    mtime = ATLAS_CONNECTIONS_PATH.stat().st_mtime
-    if _ATLAS_CONNECTIONS["mtime"] != mtime:
-        _ATLAS_CONNECTIONS.update(mtime=mtime, rows=json.loads(ATLAS_CONNECTIONS_PATH.read_text()))
-    return _ATLAS_CONNECTIONS["rows"].get(f"{a[0]}{a[1]}|{b[0]}{b[1]}", {})
