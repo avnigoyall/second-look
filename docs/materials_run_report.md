@@ -52,6 +52,17 @@ Every request to `www.uniqlo.com` is reset by the server before it sends any HTT
 
 TLS completes (certificate `CN=www.uniqlo.com`, Fast Retailing), then the edge server drops the stream. This pattern is typical of bot protection that rejects non-browser clients. Per the run rules it was not worked around: no browser user agent, no headless browser, no third-party mirror or API. No items were collected and no labels were invented.
 
+## Zara attempt (Nov 14, 22:25 America/New_York)
+
+Tried at the user's request, with the same rules (same user agent, at least 1 s between requests, no workaround). 2 requests, both blocked by the Akamai edge server with an "Access Denied" page:
+
+| URL | Result |
+|---|---|
+| `https://www.zara.com/robots.txt` | HTTP 403, "Access Denied" (Akamai reference page from errors.edgesuite.net) |
+| `https://www.zara.com/us/en/` | HTTP 403, "Access Denied" |
+
+robots.txt cannot be read, so no Zara items were collected.
+
 ## What is needed to continue
 
 One of these:
