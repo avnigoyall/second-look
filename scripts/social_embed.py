@@ -144,6 +144,37 @@ def safe_error_report(exc):
 _SPLIT_CODES = {400, 413, 422}
 
 
+def pack_existing(collection, *, batch_size=500, spec=SPEC):
+    """Rewrite legacy double-array Vultr vectors as packed float32 binary. No model calls."""
+    from pymongo import UpdateOne
+    report = {"packed": 0, "skipped_invalid": 0}
+    batch = []
+    for post in collection.find({spec.field: {"$type": "array"}}, {"_id": 1, spec.field: 1}):
+        vector = post[spec.field]
+        if not valid_embedding(vector, spec.dims):
+            report["skipped_invalid"] += 1
+            continue
+        batch.append(UpdateOne({"_id": post["_id"], spec.field: {"$type": "array"}},
+                               {"$set": {spec.field: provider.pack(vector)}}))
+        if len(batch) >= batch_size:
+            report["packed"] += collection.bulk_write(batch, ordered=False).modified_count
+            batch = []
+    if batch:
+        report["packed"] += collection.bulk_write(batch, ordered=False).modified_count
+    return report
+
+
+def drop_gemini_vectors(collection):
+    """Explicit, user-approved cleanup: remove unused Gemini vectors and only their index."""
+    gemini = provider.spec("gemini")
+    removed = collection.update_many({gemini.field: {"$exists": True}}, {"$unset": {gemini.field: ""}}).modified_count
+    dropped = False
+    if next(iter(collection.list_search_indexes(gemini.index)), None) is not None:
+        collection.drop_search_index(gemini.index)
+        dropped = True
+    return {"gemini_vectors_removed": removed, "gemini_index_dropped": dropped}
+
+
 def embed_posts(collection, embed_batch, *, limit=1000, batch_size=256, request_size=32, workers=4,
                 attempts=4, sleep=time.sleep, transient_403_retries=0, on_progress=None, spec=SPEC,
                 max_backoff=30.0):
@@ -240,7 +271,7 @@ def embed_posts(collection, embed_batch, *, limit=1000, batch_size=256, request_
                         if vector is None:
                             report["failed"] += bool(calls)
                             continue
-                        fields = {spec.field: vector, "embedding_model": spec.model, "dims": spec.dims,
+                        fields = {spec.field: provider.pack(vector), "embedding_model": spec.model, "dims": spec.dims,
                                   "embedded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
                         if spec.provider == "gemini":
                             # embedding_model and dims describe embedding_vultr; Gemini provenance is its field.
@@ -283,6 +314,10 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--create-index", action="store_true")
     parser.add_argument("--index-only", action="store_true")
+    parser.add_argument("--pack-existing", action="store_true",
+                        help="Convert legacy array Vultr vectors to packed float32 binary; no model calls")
+    parser.add_argument("--drop-gemini-vectors", action="store_true",
+                        help="Remove unused Gemini social vectors and the social_posts_vector index")
     parser.add_argument("--transient-403-retries", type=int, default=0,
                         help="Explicit opt-in for measured intermittent 403s; retries per request, default 0")
     args = parser.parse_args()
@@ -300,6 +335,13 @@ def main():
                   + (planned if request_size > 1 else 0))
     report["vultr_budget"] = provider.usage_report() if SPEC.provider == "vultr" else None
     if args.dry_run:
+        print(json.dumps(report))
+        return
+    if args.pack_existing or args.drop_gemini_vectors:
+        if args.pack_existing:
+            report.update(pack_existing(posts))
+        if args.drop_gemini_vectors:
+            report.update(drop_gemini_vectors(posts))
         print(json.dumps(report))
         return
     if not args.index_only:

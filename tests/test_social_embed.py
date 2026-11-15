@@ -75,9 +75,12 @@ class EmbedJobTests(unittest.TestCase):
                 fields = operation._doc["$set"]
                 self.assertEqual(fields["embedding_model"], VULTR.model)
                 self.assertEqual(fields["dims"], 1024)
-                self.assertEqual(len(fields["embedding_vultr"]), 1024)
+                # Packed float32 binary: about 4 KB instead of a 13 KB double array.
+                self.assertEqual(len(bytes(fields["embedding_vultr"])), 1024 * 4 + 2)
+                stored = provider.unpack(fields["embedding_vultr"])
+                self.assertEqual(len(stored), 1024)
                 self.assertNotIn("embedding", fields)
-                self.assertAlmostEqual(sum(v * v for v in fields["embedding_vultr"]), 1)
+                self.assertAlmostEqual(sum(v * v for v in stored), 1, places=5)
                 self.assertTrue(fields["embedded_at"].endswith("Z"))
         self.assertNotIn("post ", json.dumps(progress))
 
@@ -88,7 +91,7 @@ class EmbedJobTests(unittest.TestCase):
             return [[float(ord(t))] + [0.0] * (VULTR.dims - 1) for t in texts]
         embed.embed_posts(collection, batch, limit=3, request_size=3, workers=1, spec=VULTR)
         self.assertEqual([q["uri"] for q, _ in collection.writes], ["a", "b", "c"])
-        self.assertTrue(all(u["$set"]["embedding_vultr"][0] == 1.0 for _, u in collection.writes))
+        self.assertTrue(all(provider.unpack(u["$set"]["embedding_vultr"])[0] == 1.0 for _, u in collection.writes))
 
     def test_gemini_writes_only_its_own_field(self):
         collection = Collection([{"uri": "a", "text": "cargo pants"}])
@@ -376,6 +379,29 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(provider.SocialEmbeddingError):
             provider.embed_texts(["ok", "  "])
         self.client.post.assert_not_called()
+
+    def test_packed_vectors_round_trip_and_filters_avoid_array_paths(self):
+        vector = [0.5] * 1024
+        packed = provider.pack(vector)
+        post = {"embedding_vultr": packed, "embedding_model": VULTR.model, "dims": 1024}
+        self.assertEqual(provider.stored_vector(post, VULTR), vector)
+        self.assertNotIn("embedding_vultr.1023", json.dumps(provider.pending_filter(VULTR)))
+        self.assertEqual(provider.embedded_filter(VULTR)["embedding_vultr"], {"$exists": True})
+        self.assertIsNone(provider.unpack("not a vector"))
+
+    def test_pack_existing_converts_only_valid_arrays(self):
+        class Packing:
+            def __init__(self):
+                self.ops = []
+            def find(self, query, projection):
+                return [{"_id": 1, "embedding_vultr": [1.0] * 1024}, {"_id": 2, "embedding_vultr": [0.0] * 1024}]
+            def bulk_write(self, ops, ordered):
+                self.ops.extend(ops)
+                return Mock(modified_count=len(ops))
+        collection = Packing()
+        report = embed.pack_existing(collection, spec=VULTR)
+        self.assertEqual(report, {"packed": 1, "skipped_invalid": 1})
+        self.assertEqual(len(provider.unpack(collection.ops[0]._doc["$set"]["embedding_vultr"])), 1024)
 
     def test_stored_vector_checks_field_model_and_dims(self):
         good = {"embedding_vultr": [0.1] * 1024, "embedding_model": VULTR.model, "dims": 1024}

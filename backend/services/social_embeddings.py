@@ -89,6 +89,26 @@ def spec(name: str | None = None) -> Spec:
                 "embedding_vultr", "social_posts_vultr_vector")
 
 
+def pack(vector) -> object:
+    """Vultr vectors are stored as BSON float32 binary vectors (4 KB at 1024 dims instead of
+    about 13 KB as a double array). Atlas Vector Search indexes this format natively."""
+    from bson.binary import Binary, BinaryVectorDtype
+    return Binary.from_vector([float(v) for v in vector], BinaryVectorDtype.FLOAT32)
+
+
+def unpack(value) -> list | None:
+    """A stored vector as a list of floats: packed float32 binary or a legacy array."""
+    if isinstance(value, list):
+        return value
+    as_vector = getattr(value, "as_vector", None)
+    if as_vector is None:
+        return None
+    try:
+        return [float(v) for v in as_vector().data]
+    except Exception:
+        return None
+
+
 def stored_vector(post: dict, s: Spec | None = None) -> list | None:
     """The post's vector for this provider, or None. Provenance comes from the vector field.
 
@@ -96,8 +116,8 @@ def stored_vector(post: dict, s: Spec | None = None) -> list | None:
     embedding_vultr after a Vultr write, so they are checked only for the Vultr field.
     """
     s = s or spec()
-    vector = post.get(s.field)
-    if not isinstance(vector, list) or len(vector) != s.dims:
+    vector = unpack(post.get(s.field))
+    if vector is None or len(vector) != s.dims:
         return None
     if s.provider == "vultr" and (post.get("embedding_model") != s.model or post.get("dims") != s.dims):
         return None
@@ -109,16 +129,16 @@ def pending_filter(s: Spec | None = None) -> dict:
     text = {"text": {"$type": "string", "$ne": ""}}
     if s.provider == "gemini":
         return {**text, f"{s.field}.{s.dims - 1}": {"$exists": False}}
-    return {**text, "$or": [{f"{s.field}.{s.dims - 1}": {"$exists": False}},
+    # Packed vectors have no array index paths; model and dims are written with every vector.
+    return {**text, "$or": [{s.field: {"$exists": False}},
                             {"embedding_model": {"$ne": s.model}}, {"dims": {"$ne": s.dims}}]}
 
 
 def embedded_filter(s: Spec | None = None) -> dict:
     s = s or spec()
-    query = {f"{s.field}.{s.dims - 1}": {"$exists": True}}
-    if s.provider == "vultr":
-        query.update(embedding_model=s.model, dims=s.dims)
-    return query
+    if s.provider == "gemini":
+        return {f"{s.field}.{s.dims - 1}": {"$exists": True}}
+    return {s.field: {"$exists": True}, "embedding_model": s.model, "dims": s.dims}
 
 
 def _unit(vector, dims: int) -> list[float]:
