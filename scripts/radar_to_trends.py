@@ -19,21 +19,21 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-from pydantic import ValidationError  # noqa: E402
+from pydantic import ValidationError
 
-from backend.settings import ATTRIBUTES  # noqa: E402
-from backend.trends import NAME_COLLATION, TrendDoc, feature_signature, name_key  # noqa: E402
+from backend.settings import ATTRIBUTES
+from backend.trends import NAME_COLLATION, TrendDoc, feature_signature, name_key
 
 TREND_SOURCES = ("agent", "rule")
 SKIPS_DIR = ROOT / ".social_runs" / "radar_runs"
@@ -86,7 +86,7 @@ def bluesky_search_url(term: str) -> str:
 def _week_dt(week: str | None):
     if not week:
         return None
-    return datetime.strptime(week, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return datetime.strptime(week, "%Y-%m-%d").replace(tzinfo=UTC)
 
 
 def build_trend(decision: dict, active_run: dict | None) -> TrendDoc:
@@ -171,7 +171,7 @@ def record_skips(run_id: str, rows: list[dict]) -> Path | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as fh:
         for r in skips:
-            fh.write(json.dumps({**r, "at": datetime.now(timezone.utc).isoformat()}) + "\n")
+            fh.write(json.dumps({**r, "at": datetime.now(UTC).isoformat()}) + "\n")
     return path
 
 
@@ -181,7 +181,7 @@ def print_table(rows: list[dict]) -> None:
     print("-" * len(head))
     for r in rows:
         weeks = f"{r['lifespan_weeks']:g}" if r["lifespan_weeks"] is not None else "-"
-        print(f"{r['style']:<22} {str(r['decision_source']):<7} {str(r['category'] or '-'):<9} {weeks:>5}  "
+        print(f"{r['style']:<22} {r['decision_source']!s:<7} {r['category'] or '-'!s:<9} {weeks:>5}  "
               f"{r['action']:<12} {r['detail']}")
     if not rows:
         print("(no decision with final_label micro_trend in this run)")

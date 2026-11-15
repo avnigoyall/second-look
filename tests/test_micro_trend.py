@@ -2,6 +2,7 @@
 import copy
 import unittest
 from datetime import date, timedelta
+from typing import ClassVar
 
 from backend.services import micro_trend as mt
 
@@ -198,7 +199,7 @@ class IndicatorTests(unittest.TestCase):
 
 
 class ManualLabelTests(unittest.TestCase):
-    EXPECTED = {
+    EXPECTED: ClassVar[dict] = {
         "plain black tee": ("established", "medium"), "mid rise jeans": ("established", "medium"),
         "mesh flats": ("micro_trend", "low"), "micro bag": ("micro_trend", "low"),
         "balloon jeans": ("micro_trend", "low"), "slim sneakers": ("still_active", "low"),

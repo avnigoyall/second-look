@@ -411,6 +411,7 @@ def main(argv=None) -> int:
     parser.add_argument("--json", action="store_true", help="print per-term results as JSON")
     args = parser.parse_args(argv)
     import os
+
     from dotenv import load_dotenv
     from pymongo import MongoClient
     load_dotenv(ROOT / ".env")
