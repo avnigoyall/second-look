@@ -35,7 +35,20 @@
 
   const SLOW_AFTER_MS = 5000;
 
+  // The card's typeface (Inter, bundled in extension/fonts). @font-face does not work inside a shadow root,
+  // so it is registered once on the page under a private family name that cannot clash with the store's.
+  // If the store's CSP blocks it, the card falls back to the system sans (SF Pro on a Mac).
+  function ensureFont() {
+    if (document.getElementById("secondlook-font") || typeof chrome === "undefined" || !chrome.runtime?.getURL) return;
+    const style = document.createElement("style");
+    style.id = "secondlook-font";
+    style.textContent = `@font-face { font-family: "SL Inter"; font-style: normal; font-weight: 400 800; font-display: swap;
+      src: url("${chrome.runtime.getURL("fonts/Inter-latin.woff2")}") format("woff2"); }`;
+    (document.head || document.documentElement).append(style);
+  }
+
   function root() {
+    ensureFont();
     const sr = global.SecondLookShadowHost.root();
     global.SecondLookShadowHost.addStyle("card", global.SecondLookCardStyles);
     return sr;

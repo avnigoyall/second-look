@@ -298,5 +298,22 @@
     .analysis, .analysis summary { border-radius: 4px; }
     .an-title { font-family: var(--serif); font-size: 15px; }
     .tag, .an-rating { border-radius: 2px; }
+
+    /* ---------- type from references/reference-3: Inter, lowercase, extra-bold, pill buttons ---------- */
+    .sl { --font: "SL Inter", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; --serif: var(--font); font-family: var(--font); letter-spacing: -0.01em; }
+    .sl button, .sl input { font-family: var(--font); }
+    .card { border-radius: 20px; }
+    .brand { text-transform: lowercase; font-weight: 800; font-size: 16px; letter-spacing: -0.04em; color: var(--ink); }
+    .brand span::after { content: "."; }
+    .item-name { font-weight: 700; font-size: 16px; letter-spacing: -0.02em; }
+    .reason { font-size: 15px; font-weight: 500; line-height: 1.45; letter-spacing: -0.01em; }
+    .badge { border-radius: 999px; text-transform: lowercase; letter-spacing: 0; font-size: 12px; padding: 2px 10px; }
+    button.btn { border-radius: 999px; }
+    .row button.btn.primary, .row button.btn.secondary { text-transform: lowercase; letter-spacing: -0.01em; font-size: 14px; }
+    .analysis, .analysis summary { border-radius: 14px; }
+    .an-title { font-weight: 800; text-transform: lowercase; letter-spacing: -0.03em; }
+    .an-label { text-transform: lowercase; letter-spacing: 0; font-size: 12px; font-weight: 700; }
+    .analysis summary::after { text-transform: lowercase; }
+    .tag, .an-rating { border-radius: 999px; text-transform: lowercase; letter-spacing: 0; }
   `;
 })(globalThis);

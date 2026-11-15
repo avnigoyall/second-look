@@ -157,3 +157,32 @@ button.ghost.small { border-radius: 3px; text-transform: uppercase; letter-spaci
 .stat-carbon .stat-value { color: var(--good); }
 .tag { border-radius: 2px; text-transform: uppercase; letter-spacing: 0.08em; }
 input { border-radius: 3px; }
+
+/* ---------- header and footer (better-ui pass) ---------- */
+/* SECOND LOOK reads as the popup's masthead: larger serif wordmark over a thin rule. */
+header { min-height: 0; margin: -2px 0 14px; padding-bottom: 12px; border-bottom: 1px solid var(--line); justify-content: center; }
+.brand { font-size: 21px; letter-spacing: 0.14em; gap: 10px; }
+.brand svg { width: 26px; height: 26px; }
+#who { text-align: center; font-variant-numeric: tabular-nums; }
+/* Log out sits in the bottom-right corner, under a thin rule. */
+.popup-footer { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+
+/* ======================================================================
+   Type from references/reference-3: Inter, lowercase, extra-bold
+   headlines with tight tracking, pill buttons. Replaces the serif look.
+   ====================================================================== */
+@font-face { font-family: "SL Inter"; font-style: normal; font-weight: 400 800; font-display: swap;
+  src: url("../../fonts/Inter-latin.woff2") format("woff2"); }
+:root { --font: "SL Inter", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; --serif: var(--font); }
+body, button, input { font-family: var(--font); }
+body { letter-spacing: -0.01em; }
+.brand { text-transform: lowercase; font-weight: 800; font-size: 26px; letter-spacing: -0.045em; gap: 8px; }
+.brand::after { content: "."; margin-left: -8px; }
+h2 { text-transform: lowercase; font-weight: 800; font-size: 22px; letter-spacing: -0.035em; }
+.stat { border-radius: 16px; }
+.stat-label, .stat-money .stat-label, .stat-carbon .stat-label { text-transform: lowercase; letter-spacing: 0; font-size: 13px; font-weight: 500; }
+.stat-value { font-weight: 800; letter-spacing: -0.045em; }
+.tag { text-transform: lowercase; letter-spacing: 0; font-weight: 600; border-radius: 999px; padding: 1px 8px; }
+button, button.ghost.small { border-radius: 999px; }
+button.primary, button.secondary, button.ghost.small { text-transform: lowercase; letter-spacing: -0.01em; font-size: 14px; font-weight: 600; }
+input { border-radius: 12px; }

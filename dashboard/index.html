@@ -64,6 +64,22 @@
   .stat { font-family: var(--serif); font-weight: 500; letter-spacing: 0; }
   .badge { border-radius: 2px; text-transform: uppercase; letter-spacing: 0.1em; font-size: 10.5px; }
   li .name { font-family: var(--serif); font-size: 16px; font-weight: 500; }
+
+  /* Type from references/reference-3: Inter, lowercase, extra-bold headlines, pill buttons */
+  @font-face { font-family: "SL Inter"; font-style: normal; font-weight: 400 800; font-display: swap;
+    src: url("/dashboard-assets/fonts/Inter-latin.woff2") format("woff2"); }
+  :root { --font: "SL Inter", "Inter", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; --serif: var(--font); --radius: 20px; }
+  body, button, input { font-family: var(--font); letter-spacing: -0.01em; }
+  h1 { text-transform: lowercase; font-weight: 800; font-size: 26px; letter-spacing: -0.05em; }
+  h1::after { content: "."; }
+  h2 { text-transform: lowercase; font-weight: 800; font-size: 28px; letter-spacing: -0.04em; }
+  button { border-radius: 999px; text-transform: lowercase; letter-spacing: -0.01em; font-size: 14px; }
+  input { border-radius: 14px; }
+  .stat-label { text-transform: lowercase; letter-spacing: 0; font-size: 14px; font-weight: 500; }
+  .stat { font-weight: 800; letter-spacing: -0.045em; }
+  .badge { border-radius: 999px; text-transform: lowercase; letter-spacing: 0; font-size: 12px; }
+  li .name { font-weight: 700; font-size: 15px; letter-spacing: -0.02em; }
+  .goal button.goal-btn { border-radius: 999px; } /* goal.css widget follows the pill buttons */
 </style>
 </head>
 <body>

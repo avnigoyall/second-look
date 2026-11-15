@@ -322,9 +322,7 @@
   // ---------- closet gallery ----------
   const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>';
   const UNDO_MS = 5000;
-  const ROTATE_MS = 3500;
   let pending = null; // { li, next, id, timer }: a delete waiting out its undo window
-  let rotateTimer = null;
   let paused = false;
 
   function setCount() {
@@ -342,25 +340,24 @@
     thumb.className = "thumb";
     if (it.image_data) {
       const img = document.createElement("img");
-      img.src = it.image_data; img.alt = it.name; img.loading = "lazy";
+      img.src = it.image_data; img.alt = ""; img.loading = "lazy"; // the name sits right beside it
       thumb.append(img);
     } else {
       thumb.append(Object.assign(document.createElement("span"), { className: "thumb-text", textContent: "No photo" }));
     }
+    const text = Object.assign(document.createElement("div"), { className: "mini-text" });
+    const name = Object.assign(document.createElement("span"), { className: "mini-name", textContent: it.name, title: it.name });
+    const meta = Object.assign(document.createElement("span"), { className: "mini-meta" });
+    const category = it.attributes?.category || "";
+    meta.textContent = [category, it.status === "incoming" ? "On its way" : ""].filter(Boolean).join(" · ") || "In your closet";
     const del = document.createElement("button");
     del.type = "button";
     del.className = "trash";
-    del.innerHTML = TRASH_ICON;
-    del.setAttribute("aria-label", `Delete ${it.name}`);
-    del.title = "Delete";
+    del.innerHTML = TRASH_ICON + "<span>Remove</span>";
+    del.setAttribute("aria-label", `Remove ${it.name} from your closet`);
     del.addEventListener("click", () => removePiece(li, it));
-    thumb.append(del);
-    const name = Object.assign(document.createElement("span"), { className: "mini-name", textContent: it.name, title: it.name });
-    const meta = Object.assign(document.createElement("span"), {
-      className: "mini-meta",
-      textContent: it.status === "incoming" ? "Incoming" : (it.attributes?.category || ""),
-    });
-    li.append(thumb, name, meta);
+    text.append(name, meta, del);
+    li.append(thumb, text);
     return li;
   }
 
@@ -424,11 +421,19 @@
     pending = null;
   });
 
-  // Rotating gallery: one piece every ROTATE_MS, back to the start at the end. Paused on hover, focus or
-  // touch, when everything fits, and when the shopper prefers reduced motion.
+  // Sliding gallery: the strip glides slowly to the left and returns to the start at the end. It pauses on
+  // hover, focus, touch and in background tabs, stays still when everything fits, and never moves under
+  // prefers-reduced-motion (the arrows still work there, without smooth scrolling).
   const gallery = () => $("closet");
-  const step = () => (gallery().querySelector(".mini")?.getBoundingClientRect().width || 180) + 16;
+  const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const step = () => (gallery().querySelector(".mini")?.getBoundingClientRect().width || 280) + 16;
   const overflowing = () => gallery().scrollWidth - gallery().clientWidth > 4;
+  const GLIDE_PX_PER_S = 22;
+  const END_PAUSE_MS = 1600;
+  let glideFrame = null;
+  let lastTick = 0;
+  let restUntil = 0;
+  let glideX = 0; // fractional position; scrollLeft rounds, so keep our own
 
   function updateNav() {
     const show = overflowing();
@@ -438,18 +443,39 @@
 
   function move(dir) {
     const g = gallery();
+    const behavior = reduceMotion() ? "auto" : "smooth";
     const atEnd = g.scrollLeft + g.clientWidth >= g.scrollWidth - 4;
     const atStart = g.scrollLeft <= 4;
-    if (dir > 0 && atEnd) g.scrollTo({ left: 0, behavior: "smooth" });
-    else if (dir < 0 && atStart) g.scrollTo({ left: g.scrollWidth, behavior: "smooth" });
-    else g.scrollBy({ left: dir * step(), behavior: "smooth" });
+    if (dir > 0 && atEnd) g.scrollTo({ left: 0, behavior });
+    else if (dir < 0 && atStart) g.scrollTo({ left: g.scrollWidth, behavior });
+    else g.scrollBy({ left: dir * step(), behavior });
+    restUntil = performance.now() + 2500; // let the shopper look after using an arrow
+  }
+
+  function glide(now) {
+    glideFrame = requestAnimationFrame(glide);
+    const g = gallery();
+    const dt = lastTick ? now - lastTick : 0;
+    lastTick = now;
+    if (paused || document.hidden || now < restUntil || !overflowing()) { glideX = g.scrollLeft; return; }
+    if (g.scrollLeft + g.clientWidth >= g.scrollWidth - 1) {
+      restUntil = now + END_PAUSE_MS;
+      setTimeout(() => { g.scrollTo({ left: 0, behavior: "smooth" }); glideX = 0; }, END_PAUSE_MS - 400);
+      return;
+    }
+    if (Math.abs(glideX - g.scrollLeft) > 2) glideX = g.scrollLeft; // the shopper scrolled by hand
+    glideX += (GLIDE_PX_PER_S * dt) / 1000;
+    g.style.scrollSnapType = "none"; // snap would fight a sub-pixel glide
+    g.scrollLeft = glideX;
   }
 
   function startRotation() {
-    clearInterval(rotateTimer);
+    cancelAnimationFrame(glideFrame);
     updateNav();
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    rotateTimer = setInterval(() => { if (!paused && !document.hidden && overflowing()) move(1); }, ROTATE_MS);
+    if (reduceMotion()) return;
+    lastTick = 0;
+    glideX = gallery().scrollLeft;
+    glideFrame = requestAnimationFrame(glide);
   }
 
   const g0 = gallery();

@@ -16,12 +16,19 @@ function setStatus(id, text, isError = false) {
 
 let authMode = "login"; // "login" | "signup", which form shows while logged out
 
+// Account line: "email | (510) 573-3065". The phone comes from the login state, or from the iMessage status.
+let whoEmail = null;
+function setWho(email, phone) {
+  if (email) whoEmail = email;
+  $("who").textContent = phone ? `${whoEmail} | ${formatPhone(phone)}` : whoEmail || "";
+}
+
 function render({ loggedIn, email, phone }) {
   $("login-view").hidden = loggedIn || authMode !== "login";
   $("signup-view").hidden = loggedIn || authMode !== "signup";
   $("main-view").hidden = !loggedIn;
   $("logout").hidden = !loggedIn;
-  if (loggedIn) $("who").textContent = `Logged in as ${email}`;
+  if (loggedIn) setWho(email, phone);
   if (loggedIn && !pageModeLoaded) loadPageMode();
   if (loggedIn && !imsgLoaded) { imsgPolls = 0; loadImessage(); }
   if (!loggedIn) { imsgLoaded = false; clearTimeout(imsgPoll); $("imsg").hidden = true; }
@@ -51,6 +58,7 @@ function renderImessage(s) {
   box.hidden = false;
   box.dataset.state = s.status;
   imsgPhone = s.phone;
+  if (s.phone) setWho(null, s.phone);
   const text = $("imsg-text");
   const hint = $("imsg-hint");
   hint.hidden = true;
@@ -118,7 +126,6 @@ async function loadPageMode() {
 }
 
 const money = (n) => Number(n || 0).toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: n % 1 ? 2 : 0 });
-const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 async function loadSummary() {
   $("summary").classList.add("loading");
@@ -129,16 +136,7 @@ async function loadSummary() {
     sub.textContent = "2";
     $("co2e").replaceChildren(`${Number(data.co2e_kg).toLocaleString("en-US", { maximumFractionDigits: 1 })} kg CO`, sub, "e");
 
-    let detail;
-    if (!data.items_skipped) {
-      detail = "Nothing skipped yet. When you press Skip it on an item, its price and carbon footprint add up here.";
-    } else {
-      detail = `From ${plural(data.items_skipped, "skipped item")}.`;
-      if (data.co2e_items_counted < data.items_skipped) {
-        detail += ` CO2e counts ${data.co2e_items_counted} of them: only garment types with a published footprint are included.`;
-      }
-    }
-    $("summary-detail").textContent = detail;
+    $("summary-detail").textContent = ""; // only errors show here
 
     const list = $("sources-list");
     list.replaceChildren();

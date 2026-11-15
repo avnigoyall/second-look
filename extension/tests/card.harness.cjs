@@ -156,7 +156,8 @@ async function shot(page, name) {
     } } });
     await s.card.locator(".social-chatter").waitFor();
     check(/Bluesky chatter on barrel jeans: peaked 6 weeks ago, down 65%/.test(await s.card.locator(".social-chatter").innerText()), `social: sampled estimate ${v.tag}`);
-    check(await s.card.locator(".social-chatter .tag").innerText() === "Estimate", `social: estimate label ${v.tag}`);
+    // textContent: the label text itself; the theme lowercases it on screen (innerText would read "estimate")
+    check((await s.card.locator(".social-chatter .tag").textContent()).trim() === "Estimate", `social: estimate label ${v.tag}`);
     check(await s.card.locator(".social-chatter button").count() === 0, `social: no new buttons ${v.tag}`);
     check(await s.card.locator(".social-chatter a").count() === 0, `social: no link without a page ${v.tag}`);
     shots.push(await shot(s.page, `social-${v.tag}`)); await done(s);
