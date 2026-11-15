@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Social Trend Radar | Second Look</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234b2a7b'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M16 16L22 10' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f8f6fb; --card: #fff; --ink: #1e1a24; --muted: #6a6275;
+    --line: #e6e0ee; --accent: #4b2a7b; --input: #82768f; --warm: #a8620a;
+    --graph-bg: #faf9fc; --observed: #898094; --inferred: #bcb4c8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15121b; --card: #1e1a26; --ink: #f2eef7; --muted: #b1a8bd;
+      --line: #362f40; --accent: #c4a9ff; --input: #978ba4; --warm: #e6a454;
+      --graph-bg: #1b1722; --observed: #a69bb5; --inferred: #5c526a;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { width: min(1040px, 100%); margin: auto; padding: 40px 24px 56px; }
+  header { margin-bottom: 28px; }
+  .eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+  h1 { margin: 0 0 8px; font-size: clamp(26px, 4vw, 34px); line-height: 1.2; letter-spacing: -.035em; }
+  h2 { margin: 0; font-size: 18px; line-height: 1.35; letter-spacing: -.02em; }
+  p { margin: 0; }
+  .intro { color: var(--muted); max-width: 72ch; font-size: 14px; }
+  .panel { margin-top: 20px; padding: 24px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 12px; }
+  .subline { margin-top: 5px; font-size: 13px; color: var(--muted); }
+  .graph-wrap { position: relative; margin-top: 20px; }
+  canvas { display: block; width: 100%; height: 420px; background: var(--graph-bg); border-radius: 4px; }
+  .graph-caption, .chart-caption { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  .legend { display: flex; gap: 6px 18px; flex-wrap: wrap; list-style: none; padding: 0; margin: 16px 0 0; max-height: 94px; overflow: auto; overscroll-behavior: contain; }
+  .legend li { display: inline-flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--muted); }
+  .swatch { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; }
+  .legend-size { font-variant-numeric: tabular-nums; }
+  .edge-key { display: flex; gap: 20px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin-top: 12px; }
+  .edge-key span { display: inline-flex; align-items: center; gap: 6px; }
+  .edge-key i { display: inline-block; width: 21px; border-top: 1px solid var(--observed); }
+  .edge-key .inferred { border-top: 1px dashed var(--inferred); }
+  .tooltip { position: absolute; max-width: 220px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 12px; pointer-events: none; }
+  label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; min-width: 195px; max-width: 100%; }
+  select { min-height: 44px; width: 100%; font: inherit; font-size: 14px; color: var(--ink); background: var(--card); border: 1px solid var(--input); border-radius: 6px; padding: 8px 32px 8px 12px; }
+  select:focus-visible, .legend:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  select:disabled { opacity: .65; }
+  .chart-wrap { margin-top: 20px; }
+  svg { width: 100%; height: auto; display: block; overflow: visible; }
+  svg text { fill: var(--muted); font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  svg .grid { stroke: var(--line); stroke-width: 1; }
+  svg .curve { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  svg .partial-curve { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 4 5; stroke-linecap: round; opacity: .7; }
+  svg .point { fill: var(--accent); }
+  svg .partial-point { fill: var(--card); stroke: var(--accent); stroke-width: 1.5; }
+  svg .peak-rule { stroke: var(--warm); stroke-width: 1; stroke-dasharray: 3 4; }
+  svg .peak-dot { fill: var(--card); stroke: var(--warm); stroke-width: 2.5; }
+  svg .peak-label { fill: var(--warm); font-weight: 600; }
+  .message { padding: 36px 0; color: var(--muted); font-size: 14px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  @media (max-width: 600px) {
+    main { padding: 28px 16px 40px; }
+    .panel { padding: 18px; }
+    .panel-head { align-items: stretch; flex-direction: column; gap: 14px; }
+    label { width: 100%; }
+    canvas { height: 330px; }
+    .intro { font-size: 13px; }
+    .legend { max-height: 120px; }
+  }
+  @media (forced-colors: active) {
+    canvas { border: 1px solid CanvasText; }
+    .swatch { border: 1px solid CanvasText; }
+    svg .curve, svg .partial-curve, svg .partial-point, svg .peak-rule, svg .peak-dot { stroke: CanvasText; }
+    svg .point { fill: CanvasText; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Second Look / Bluesky sample</p>
+    <h1>Social Trend Radar</h1>
+    <p class="intro">A view of fashion chatter over a 12-month observation window. Counts are sampled search index estimates, not platform totals or a trend's origin.</p>
+  </header>
+  <section class="panel" aria-labelledby="communities-heading" aria-busy="true" id="graph-panel">
+    <h2 id="communities-heading">Communities in the conversation</h2>
+    <p class="subline" id="graph-summary">Hashed authors, grouped by discussion.</p>
+    <p class="message" role="status" id="graph-message">Loading the community graph...</p>
+    <figure id="graph-figure" hidden style="margin:0">
+      <div class="graph-wrap">
+        <canvas id="graph" role="img" aria-label="Hashed author community graph. Community names and sizes appear in the legend below."></canvas>
+        <div class="tooltip" id="graph-tooltip" hidden></div>
+      </div>
+      <div class="edge-key" aria-hidden="true"><span><i></i>Observed interaction</span><span><i class="inferred"></i>Inferred text similarity</span></div>
+      <ul class="legend" id="community-legend" tabindex="0" aria-label="Community names and full sizes"></ul>
+      <figcaption class="graph-caption" id="graph-caption">Each dot is a hashed author. Layout groups communities for readability; distance is not a measure of influence.</figcaption>
+    </figure>
+  </section>
+  <section class="panel" aria-labelledby="curve-heading" aria-busy="true" id="curve-panel">
+    <div class="panel-head">
+      <div><h2 id="curve-heading">Weekly chatter</h2><p class="subline">Term posts as a share of that week's sampled corpus.</p></div>
+      <label for="term">Fashion term<select id="term" disabled><option>Loading terms...</option></select></label>
+    </div>
+    <p class="message" role="status" id="curve-message">Loading weekly estimates...</p>
+    <figure id="curve-figure" hidden style="margin:0">
+      <div class="chart-wrap"><svg id="curve" viewBox="0 0 900 300" role="img" aria-labelledby="curve-title curve-description"></svg></div>
+      <figcaption class="chart-caption" id="curve-caption"></figcaption>
+    </figure>
+  </section>
+</main>
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const ns = "http://www.w3.org/2000/svg";
+  const colors = ["#8060aa", "#288d89", "#ba7840", "#687fc4", "#b76592", "#628b47", "#8c79bf", "#3389ad", "#b48b35", "#a5635d", "#599d86", "#7c83a7"];
+  let trends = [], graphData = null, positions = [], width = 0, height = 0;
+  const clean = (value, max = 90) => String(value || "").replace(/(?:at:\/\/|https?:\/\/)\S+|@[\w.:-]+|\bdid:[\w:.-]+|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/gi, "[account]").replace(/\u2014/g, "-").slice(0, max);
+  const text = (tag, content, attrs = {}) => {
+    const element = document.createElementNS(ns, tag);
+    for (const [name, value] of Object.entries(attrs)) element.setAttribute(name, String(value));
+    if (content !== null) element.textContent = content;
+    return element;
+  };
+  const shortDate = week => {
+    const date = new Date(String(week).slice(0, 10) + "T12:00:00Z");
+    return Number.isNaN(date.valueOf()) ? "Unknown date" : new Intl.DateTimeFormat(undefined, {month: "short", day: "numeric", timeZone: "UTC"}).format(date);
+  };
+  const fail = (kind, message) => {
+    $(kind + "-message").textContent = message;
+    $(kind + "-message").hidden = false;
+    $(kind + "-panel").setAttribute("aria-busy", "false");
+    $(kind + "-figure").hidden = true;
+  };
+  async function api(path) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(path, {signal: controller.signal, headers: {Accept: "application/json"}});
+      if (!response.ok) throw new Error("unavailable");
+      return await response.json();
+    } finally { clearTimeout(timer); }
+  }
+  function splitGroups(groups, x, y, w, h, cells) {
+    if (!groups.length) return;
+    if (groups.length === 1) { cells.set(groups[0].id, {x, y, w, h}); return; }
+    const total = groups.reduce((sum, group) => sum + group.nodes.length, 0);
+    let subtotal = 0, cut = 1;
+    for (let i = 0; i < groups.length - 1; i++) {
+      subtotal += groups[i].nodes.length; cut = i + 1;
+      if (subtotal >= total / 2) break;
+    }
+    const ratio = subtotal / total;
+    if (w >= h) {
+      splitGroups(groups.slice(0, cut), x, y, w * ratio, h, cells);
+      splitGroups(groups.slice(cut), x + w * ratio, y, w * (1 - ratio), h, cells);
+    } else {
+      splitGroups(groups.slice(0, cut), x, y, w, h * ratio, cells);
+      splitGroups(groups.slice(cut), x, y + h * ratio, w, h * (1 - ratio), cells);
+    }
+  }
+  function drawGraph() {
+    if (!graphData || $("graph-figure").hidden) return;
+    const canvas = $("graph"), rect = canvas.getBoundingClientRect();
+    width = rect.width; height = rect.height;
+    if (!width || !height) return;
+    const ratio = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { fail("graph", "This browser cannot display the community graph."); return; }
+    ctx.scale(ratio, ratio);
+    const groups = graphData.groups, cells = new Map(), byId = new Map();
+    splitGroups(groups, 14, 14, width - 28, height - 28, cells);
+    positions = [];
+    for (const group of groups) {
+      const cell = cells.get(group.id), padding = Math.min(14, cell.w * .12, cell.h * .12);
+      group.nodes.forEach((node, index) => {
+        const angle = index * 2.399963229728653;
+        const radius = Math.sqrt((index + .5) / group.nodes.length) * .46;
+        const position = {node, group, x: cell.x + cell.w / 2 + Math.cos(angle) * radius * (cell.w - padding),
+          y: cell.y + cell.h / 2 + Math.sin(angle) * radius * (cell.h - padding)};
+        positions.push(position); byId.set(node.id, position);
+      });
+    }
+    const styles = getComputedStyle(document.documentElement);
+    for (const inferred of [true, false]) {
+      ctx.beginPath(); ctx.strokeStyle = styles.getPropertyValue(inferred ? "--inferred" : "--observed").trim();
+      ctx.globalAlpha = inferred ? .22 : .42; ctx.lineWidth = inferred ? .45 : .7; ctx.setLineDash(inferred ? [2, 3] : []);
+      for (const edge of graphData.edges) {
+        if ((edge.type === "similarity") !== inferred) continue;
+        const a = byId.get(edge.source), b = byId.get(edge.target);
+        if (a && b) { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1; ctx.setLineDash([]);
+    for (const position of positions) {
+      ctx.fillStyle = position.group.color; ctx.beginPath();
+      ctx.arc(position.x, position.y, Math.min(4.5, 1.8 + Math.log2(1 + Math.max(0, Number(position.node.degree) || 0)) * .35), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  function loadGraph(data) {
+    if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) throw new Error("invalid");
+    const nodes = data.nodes.slice(0, 1500).filter(node => node && typeof node.id === "string" && typeof node.community_id === "string");
+    if (!nodes.length) { fail("graph", "No community graph has been built yet."); return; }
+    const registry = new Map((Array.isArray(data.communities) ? data.communities : []).map(group => [group.id, group]));
+    const buckets = new Map();
+    for (const node of nodes) {
+      const id = node.community_id;
+      if (!buckets.has(id)) buckets.set(id, {id, nodes: [], name: clean(registry.get(id)?.name || node.community_name || "Unnamed discussion"), size: registry.get(id)?.size});
+      buckets.get(id).nodes.push(node);
+    }
+    const groups = [...buckets.values()].sort((a, b) => b.nodes.length - a.nodes.length || a.id.localeCompare(b.id));
+    groups.forEach((group, index) => { group.color = colors[index % colors.length]; group.nodes.sort((a, b) => a.id.localeCompare(b.id)); });
+    graphData = {groups, edges: data.edges.slice(0, 15000)};
+    const legend = $("community-legend"); legend.replaceChildren();
+    for (const group of groups) {
+      const row = document.createElement("li"), swatch = document.createElement("span"), name = document.createElement("span");
+      swatch.className = "swatch"; swatch.style.backgroundColor = group.color; swatch.setAttribute("aria-hidden", "true");
+      name.textContent = group.name + " (" + (Number.isFinite(Number(group.size)) ? Number(group.size).toLocaleString() : group.nodes.length.toLocaleString()) + ")";
+      row.append(swatch, name); legend.append(row);
+    }
+    $("graph-summary").textContent = nodes.length.toLocaleString() + " hashed authors shown across " + groups.length.toLocaleString() + " discussion communities.";
+    const semanticNote = data.stats?.similarity_enabled === false
+      ? "This graph uses observed interactions only; text similarity has not been computed."
+      : "Similarity links are inferred, not observed interactions.";
+    $("graph-caption").textContent = "Each dot is a hashed author. Up to 1,500 authors and 15,000 links are shown. Community sizes refer to the full graph. " + semanticNote + " Layout distance does not measure influence.";
+    $("graph-message").hidden = true; $("graph-figure").hidden = false; $("graph-panel").setAttribute("aria-busy", "false");
+    drawGraph();
+  }
+  function drawCurve() {
+    const trend = trends.find(row => row.term === $("term").value);
+    if (!trend) return;
+    const rows = (Array.isArray(trend.weekly_counts) ? trend.weekly_counts : []).filter(row => /^\d{4}-\d{2}-\d{2}$/.test(row.week || "")).sort((a, b) => a.week.localeCompare(b.week));
+    if (!rows.length) { fail("curve", "No weekly observations are available for this term."); return; }
+    $("curve-message").hidden = true; $("curve-figure").hidden = false;
+    const svg = $("curve"); svg.replaceChildren();
+    const chartWidth = Math.max(260, Math.min(900, svg.getBoundingClientRect().width));
+    svg.setAttribute("viewBox", "0 0 " + chartWidth + " 300");
+    const safeTerm = clean(trend.term), title = text("title", "Weekly Bluesky sample share for " + safeTerm, {id: "curve-title"});
+    const valid = row => ["complete", "partial"].includes(row.query_coverage) && Number(row.corpus_count) > 0 && Number.isFinite(row.normalized) && row.normalized >= 0;
+    const complete = row => valid(row) && row.complete === true && row.query_coverage === "complete" && row.corpus_query_coverage === "complete" && !row.saturated && !row.counts_are_lower_bound;
+    const observed = rows.filter(valid), fullCount = rows.filter(complete).length, partialCount = observed.length - fullCount, gapCount = rows.length - observed.length;
+    svg.append(title, text("desc", "A normalized weekly sample estimate. " + fullCount + " fully covered weeks and " + partialCount + " partial sample weeks are plotted. Dashed segments and hollow points mean incomplete sampling. " + gapCount + " unvisited or unknown weeks are gaps.", {id: "curve-description"}));
+    const left = 48, right = chartWidth - 16, top = 40, bottom = 252;
+    const ymax = Math.max(.01, ...observed.map(row => row.normalized)) * 1.15;
+    const x = index => rows.length === 1 ? (left + right) / 2 : left + (right - left) * index / (rows.length - 1);
+    const y = value => bottom - (bottom - top) * value / ymax;
+    for (let i = 0; i <= 4; i++) {
+      const value = ymax * i / 4, yp = y(value);
+      svg.append(text("line", null, {x1: left, x2: right, y1: yp, y2: yp, class: "grid"}));
+      svg.append(text("text", (value * 100).toFixed(ymax < .1 ? 1 : 0) + "%", {x: left - 12, y: yp + 4, "text-anchor": "end"}));
+    }
+    const tickSet = new Set([0, Math.floor((rows.length - 1) / 3), Math.floor(2 * (rows.length - 1) / 3), rows.length - 1]);
+    for (const index of tickSet) svg.append(text("text", shortDate(rows[index].week), {x: x(index), y: bottom + 26, "text-anchor": "middle"}));
+    let fullPath = "", partialPath = "";
+    rows.forEach((row, index) => {
+      if (!index || !valid(row) || !valid(rows[index - 1])) return;
+      const segment = "M" + x(index - 1).toFixed(2) + "," + y(rows[index - 1].normalized).toFixed(2) + "L" + x(index).toFixed(2) + "," + y(row.normalized).toFixed(2) + " ";
+      if (complete(row) && complete(rows[index - 1])) fullPath += segment;
+      else partialPath += segment;
+    });
+    svg.append(text("path", null, {d: partialPath, class: "partial-curve"}), text("path", null, {d: fullPath, class: "curve"}));
+    rows.forEach((row, index) => {
+      if (!valid(row)) return;
+      const point = text("circle", null, {cx: x(index), cy: y(row.normalized), r: complete(row) ? 2.5 : 3, class: complete(row) ? "point" : "partial-point"});
+      point.append(text("title", shortDate(row.week) + ": " + (row.normalized * 100).toFixed(2) + "% of sampled corpus" + (complete(row) ? "" : " (incomplete sample)"))); svg.append(point);
+    });
+    const peakIndex = rows.findIndex(row => row.week === trend.peak_week && valid(row));
+    if (peakIndex >= 0) {
+      const row = rows[peakIndex], xp = x(peakIndex), yp = y(row.normalized);
+      svg.append(text("line", null, {x1: xp, x2: xp, y1: yp + 7, y2: bottom, class: "peak-rule"}));
+      svg.append(text("circle", null, {cx: xp, cy: yp, r: 5, class: "peak-dot"}));
+      svg.append(text("text", "Sample peak · " + shortDate(row.week), {x: Math.max(left + 4, Math.min(right - 4, xp)), y: yp - 14,
+        "text-anchor": xp > right - 150 ? "end" : xp < left + 100 ? "start" : "middle", class: "peak-label"}));
+    }
+    if (!observed.length) svg.append(text("text", "No observed weeks to plot", {x: (left + right) / 2, y: (top + bottom) / 2, "text-anchor": "middle"}));
+    $("curve-caption").textContent = "Estimate for " + safeTerm + ". " + fullCount + " fully covered weeks; " + partialCount + " partial or lower-bound sample weeks (hollow points, dashed lines); " + gapCount + " unvisited or unknown weeks (gaps). Saturated first pages give lower-bound counts. Shares use that week's collected corpus, which may be incomplete. " + (peakIndex >= 0 ? "The sample peak is within this observation window, not the origin." : "No sample peak is available in the observed weeks.");
+    const url = new URL(location.href); url.searchParams.set("term", trend.term); history.replaceState(null, "", url);
+  }
+  function loadTrends(data) {
+    if (!Array.isArray(data.trends)) throw new Error("invalid");
+    trends = data.trends.filter(row => row && typeof row.term === "string").sort((a, b) => a.term.localeCompare(b.term));
+    const select = $("term"); select.replaceChildren();
+    if (!trends.length) {
+      const option = document.createElement("option"); option.textContent = "No terms available"; select.append(option);
+      fail("curve", "No weekly trends have been computed yet."); return;
+    }
+    for (const trend of trends) { const option = document.createElement("option"); option.value = trend.term; option.textContent = clean(trend.term); select.append(option); }
+    const requested = new URLSearchParams(location.search).get("term");
+    if (trends.some(row => row.term === requested)) select.value = requested;
+    select.disabled = false; $("curve-panel").setAttribute("aria-busy", "false"); drawCurve();
+  }
+  $("term").addEventListener("change", drawCurve);
+  $("graph").addEventListener("pointermove", event => {
+    const canvas = $("graph"), rect = canvas.getBoundingClientRect(), px = event.clientX - rect.left, py = event.clientY - rect.top;
+    let closest = null, distance = 64;
+    for (const position of positions) {
+      const squared = (position.x - px) ** 2 + (position.y - py) ** 2;
+      if (squared < distance) { closest = position; distance = squared; }
+    }
+    const tip = $("graph-tooltip"); tip.hidden = !closest;
+    if (closest) {
+      tip.textContent = closest.group.name + " · " + (Number(closest.node.degree) || 0) + " links";
+      tip.style.left = Math.min(Math.max(8, width - 228), px + 12) + "px";
+      tip.style.top = Math.max(8, py - 38) + "px";
+    }
+  });
+  $("graph").addEventListener("pointerleave", () => { $("graph-tooltip").hidden = true; });
+  const redraw = () => { drawGraph(); if (trends.length) drawCurve(); };
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(redraw).observe($("graph"));
+  window.addEventListener("resize", redraw);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawGraph);
+  api("/social-graph").then(loadGraph).catch(() => fail("graph", "The community graph is unavailable. Please try again later."));
+  api("/social-trends").then(loadTrends).catch(() => { $("term").replaceChildren(); const option = document.createElement("option"); option.textContent = "Terms unavailable"; $("term").append(option); fail("curve", "Weekly trends are unavailable. Please try again later."); });
+})();
+</script>
+</body>
+</html>

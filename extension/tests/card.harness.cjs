@@ -149,6 +149,18 @@ async function shot(page, name) {
     }
     shots.push(await shot(s.page, `trend-${v.tag}`)); await done(s);
 
+    // Optional sampled social context adds one estimate and no action buttons.
+    const peak = new Date(Date.now() - 6 * 7 * 86400000).toISOString().slice(0, 10);
+    s = await open(browser, { ...v, response: { ...RESPONSES.trend, social_context: {
+      term: "barrel jeans", peak_week: peak, decay_ratio: 0.35,
+    } } });
+    await s.card.locator(".social-chatter").waitFor();
+    check(/Bluesky chatter on barrel jeans: peaked 6 weeks ago, down 65%/.test(await s.card.locator(".social-chatter").innerText()), `social: sampled estimate ${v.tag}`);
+    check(await s.card.locator(".social-chatter .tag").innerText() === "Estimate", `social: estimate label ${v.tag}`);
+    check(await s.card.locator(".social-chatter button").count() === 0, `social: no new buttons ${v.tag}`);
+    check(await s.card.locator(".social-chatter a").count() === 0, `social: no link without a page ${v.tag}`);
+    shots.push(await shot(s.page, `social-${v.tag}`)); await done(s);
+
     // good_buy: reason and the wears line labeled estimate
     s = await open(browser, { ...v, response: RESPONSES.good });
     await s.card.locator(".badge").waitFor();

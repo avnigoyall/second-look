@@ -218,6 +218,7 @@
       el("span", { class: `badge ${result.verdict}`, text: LABELS[result.verdict] || result.verdict }),
       el("p", { class: "reason", text: result.reason }),
       ...verdictDetails(result),
+      ...socialDetails(result.social_context),
       actions,
       status,
       goalLine,
@@ -313,6 +314,27 @@
   }
 
   // ---------- verdict details ----------
+
+  // Counts describe sampled search chatter. A missing or incomplete estimate adds no copy.
+  function socialDetails(context) {
+    if (!context || typeof context.term !== "string" || !context.term.trim()) return [];
+    const peak = Date.parse(context.peak_week);
+    const ratio = context.decay_ratio;
+    if (!Number.isFinite(peak) || typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0) return [];
+    const elapsed = Math.max(0, Math.floor((Date.now() - peak) / (7 * 86400000)));
+    const change = Math.round(Math.abs(1 - ratio) * 100);
+    const direction = ratio > 1 ? "up" : "down";
+    const copy = `Bluesky chatter on ${context.term}: peaked ${elapsed} weeks ago, ${direction} ${change}%`;
+    let page = null;
+    try {
+      const url = new URL(context.trends_ui_url);
+      if (/^https?:$/.test(url.protocol) && url.pathname === "/trends-ui") page = url.href;
+    } catch { /* No page was advertised by the backend. */ }
+    return [el("p", { class: "wears social-chatter", "data-social-estimate": "true" }, [
+      page ? el("a", { href: page, target: "_blank", rel: "noopener noreferrer", text: copy }) : el("span", { text: copy }),
+      el("span", { class: "tag", text: "Estimate" }),
+    ])];
+  }
 
   function verdictDetails(r) {
     const parts = r.verdict === "have_this_look" ? [closetMatches(r)]

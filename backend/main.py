@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from urllib.parse import urlencode
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from backend import models as m
@@ -26,6 +27,7 @@ from backend.routers import closet as closet_router
 from backend.routers import goal as goal_router
 from backend.routers import imessage as imessage_router
 from backend.routers import trends as trends_router
+from backend.routers import social as social_router
 from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
 from backend.services.embeddings import EmbeddingError
 from backend.services import photon_lines
@@ -52,6 +54,7 @@ app.include_router(closet_router.router)
 app.include_router(goal_router.router)
 app.include_router(trends_router.router)
 app.include_router(imessage_router.router)
+app.include_router(social_router.router)
 
 
 # uvicorn configures this logger at INFO, so timing lines show in the server output.
@@ -182,10 +185,13 @@ def me(user=Depends(current_user)):
 # ---------- verdict flow ----------
 
 @app.post("/analyze", response_model=m.AnalyzeResponse)
-def analyze(body: m.AnalyzeRequest, http: Response, user=Depends(current_user)):
+def analyze(body: m.AnalyzeRequest, http: Response, request: Request, user=Depends(current_user)):
     """Part 5 verdict engine (backend/services/verdict.py). Always answers: failures end in a code-only verdict.
     Server-Timing lists the engine's stage times (attributes, signals, claude, ...) in ms."""
     response, record = decide(user, body.item, save=True)
+    if response.social_context and (ROOT / "dashboard" / "trends.html").is_file():
+        response.social_context.trends_ui_url = str(request.base_url).rstrip("/") + "/trends-ui?" + urlencode(
+            {"term": response.social_context.term})
     stored = record.get("attributes")
     if stored and stored.get("category") and stored.get("is_apparel") is not False:
         try:
@@ -328,6 +334,14 @@ def dashboard_ui():
 @app.get("/closet-ui", include_in_schema=False)
 def closet_ui():
     return FileResponse(ROOT / "dashboard" / "closet.html")
+
+
+@app.get("/trends-ui", include_in_schema=False)
+def trends_ui():
+    page = ROOT / "dashboard" / "trends.html"
+    if not page.is_file():
+        raise HTTPException(404, "Bluesky sample page is unavailable")
+    return FileResponse(page)
 
 
 app.mount("/dashboard-assets", StaticFiles(directory=ROOT / "dashboard"), name="dashboard-assets")

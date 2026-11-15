@@ -1,0 +1,20 @@
+{
+  "min_posts": 20,
+  "medium_confidence_posts": 100,
+  "high_confidence_posts": 500,
+  "high_confidence_weeks": 16,
+  "minimum_observed_weeks": 8,
+  "fading_decay_ratio": 0.5,
+  "rising_recent_growth": 1.25,
+  "rising_peak_ratio": 0.8,
+  "peaking_peak_ratio": 0.8,
+  "peaking_max_weeks_ago": 3,
+  "minimum_similarity": 0.45,
+  "minimum_vote_share": 0.4,
+  "cache_seconds": 600,
+  "lookup_timeout_seconds": 0.45,
+  "calibration": {
+    "status": "provisional",
+    "note": "Initial thresholds are not calibrated. Run social_metrics.py --calibrate after collection. Labels are used only for threshold evaluation, never as per-item classifier inputs."
+  }
+}
