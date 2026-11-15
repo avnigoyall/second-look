@@ -19,13 +19,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("SECONDLOOK_WARMUP", "0")
 
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
-from backend.main import app  # noqa: E402
+from backend.main import app
 
 ITEM_KEYS = ("name", "image_url", "price", "store", "url", "description", "breadcrumb", "materials")
 
