@@ -2,7 +2,7 @@
 
 Status: measured.
 
-Generated at: 2026-11-15T00:55:43.436316Z.
+Generated at: 2026-11-15T01:49:55.351633Z.
 
 Scope: real_only. Synthetic posts excluded: 0. Embedding: vultr qwen3-embedding-4b, 1024 dims, index social_posts_vultr_vector.
 
@@ -17,10 +17,10 @@ Scope: real_only. Synthetic posts excluded: 0. Embedding: vultr qwen3-embedding-
 | Recall@5 | 1.0000 |
 | Recall@10 | 1.0000 |
 | MRR@30 | 1.0000 |
-| Lookup p50 (ms) | 826.0625 |
-| Lookup p95 (ms) | 3130.5458 |
-| Weighted cluster purity by term | 0.4147 |
-| Assigned post share | 0.9954 |
+| Lookup p50 (ms) | 1425.4066 |
+| Lookup p95 (ms) | 2699.8658 |
+| Weighted cluster purity by term | 0.4103 |
+| Assigned post share | 1.0000 |
 
 Staples and micro-trends do not separate reliably in this sample.
 
@@ -95,13 +95,13 @@ Ten user-supplied press annotations are compared with real_only sample metrics. 
 
 | Term | press_status | Sample posts (real_only) | Breadth | Concentration | Published momentum | Confidence | Agreement | Preview momentum (8 wk) | Preview posts | Preview confidence | Preview agreement | Saturated week share | Coverage note | Press source/date |
 | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- | ---: | --- | --- | ---: | --- | --- |
-| quarter zip | rising | 1601 | 19 | 0.480 | unknown | low | not_comparable | steady | 680 | low | disagree | 0.396 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. 21/53 observation weekly windows, including partial boundary weeks, saturated the 20-post first page. Those counts remain labeled lower bounds even after confirmed exhaustion. Saturation exceeds 25 percent, so confidence is capped at medium. | unmeasured |
-| straight leg jeans | rising | 433 | 17 | 0.356 | unknown | low | not_comparable | steady | 84 | low | disagree | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
-| poplin shirt | rising | 111 | 5 | 0.577 | unknown | low | not_comparable | steady | 26 | low | disagree | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
-| slim sneakers | rising | 27 | 3 | 0.444 | unknown | low | not_comparable | unknown | 1 | low | not_comparable | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
-| soft suiting | rising | 22 | 2 | 0.545 | unknown | low | not_comparable | unknown | 2 | low | not_comparable | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
+| quarter zip | rising | 1601 | 18 | 0.478 | unknown | low | not_comparable | steady | 680 | low | disagree | 0.396 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. 21/53 observation weekly windows, including partial boundary weeks, saturated the 20-post first page. Those counts remain labeled lower bounds even after confirmed exhaustion. Saturation exceeds 25 percent, so confidence is capped at medium. | unmeasured |
+| straight leg jeans | rising | 433 | 17 | 0.370 | unknown | low | not_comparable | steady | 84 | low | disagree | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
+| poplin shirt | rising | 111 | 6 | 0.523 | unknown | low | not_comparable | steady | 26 | low | disagree | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
+| slim sneakers | rising | 27 | 3 | 0.519 | unknown | low | not_comparable | unknown | 1 | low | not_comparable | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
+| soft suiting | rising | 22 | 2 | 0.500 | unknown | low | not_comparable | unknown | 2 | low | not_comparable | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
 | balloon jeans | fading | 13 | 2 | 0.308 | unknown | low | not_comparable | unknown | 2 | low | not_comparable | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
-| skinny jeans | fading | 1027 | 18 | 0.595 | unknown | low | not_comparable | steady | 178 | low | disagree | 0.396 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. 21/53 observation weekly windows, including partial boundary weeks, saturated the 20-post first page. Those counts remain labeled lower bounds even after confirmed exhaustion. Saturation exceeds 25 percent, so confidence is capped at medium. | unmeasured |
-| dad sneakers | fading | 117 | 8 | 0.368 | unknown | low | not_comparable | unknown | 15 | low | not_comparable | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
-| mini bag | fading | 497 | 16 | 0.531 | unknown | low | not_comparable | steady | 95 | low | disagree | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
-| high heels | fading | 981 | 16 | 0.576 | unknown | low | not_comparable | steady | 163 | low | disagree | 0.264 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. 14/53 observation weekly windows, including partial boundary weeks, saturated the 20-post first page. Those counts remain labeled lower bounds even after confirmed exhaustion. Saturation exceeds 25 percent, so confidence is capped at medium. | unmeasured |
+| skinny jeans | fading | 1027 | 17 | 0.600 | unknown | low | not_comparable | steady | 178 | low | disagree | 0.396 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. 21/53 observation weekly windows, including partial boundary weeks, saturated the 20-post first page. Those counts remain labeled lower bounds even after confirmed exhaustion. Saturation exceeds 25 percent, so confidence is capped at medium. | unmeasured |
+| dad sneakers | fading | 117 | 7 | 0.598 | unknown | low | not_comparable | unknown | 15 | low | not_comparable | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
+| mini bag | fading | 497 | 17 | 0.515 | unknown | low | not_comparable | steady | 95 | low | disagree | 0.000 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. | unmeasured |
+| high heels | fading | 981 | 16 | 0.551 | unknown | low | not_comparable | steady | 163 | low | disagree | 0.264 | Unvisited, truncated or unknown term/corpus searches are not observed absence. Decay is unavailable; momentum is unknown and confidence stays low. 14/53 observation weekly windows, including partial boundary weeks, saturated the 20-post first page. Those counts remain labeled lower bounds even after confirmed exhaustion. Saturation exceeds 25 percent, so confidence is capped at medium. | unmeasured |
