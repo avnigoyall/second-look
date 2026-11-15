@@ -1,0 +1,107 @@
+{
+  "_about": "Photo-only material estimate (backend/services/materials_photo.py). FashionCLIP zero-shot scores one product photo against coarse material groups. The result is a labeled estimate line only. It never changes a verdict and never enters a numeric rule.",
+  "model_id": "patrickjohncyh/fashion-clip",
+  "groups": {
+    "cotton_denim": {
+      "display": "cotton or denim",
+      "prompts": [
+        "a photo of a cotton garment",
+        "a product photo of clothing made of cotton",
+        "a garment made of denim",
+        "a close-up of cotton fabric",
+        "a cotton jersey or cotton twill piece of clothing"
+      ]
+    },
+    "wool_knit": {
+      "display": "wool or knit",
+      "prompts": [
+        "a photo of a wool garment",
+        "a product photo of a knitted sweater",
+        "a garment made of wool or cashmere",
+        "a close-up of knit wool fabric",
+        "a chunky knit piece of clothing"
+      ]
+    },
+    "synthetic": {
+      "display": "synthetic fabric",
+      "prompts": [
+        "a photo of a polyester garment",
+        "a product photo of clothing made of nylon",
+        "a garment made of synthetic fabric",
+        "a close-up of shiny technical polyester fabric",
+        "a nylon puffer or polyester athletic piece of clothing"
+      ]
+    },
+    "leather_or_faux": {
+      "display": "leather or faux leather",
+      "prompts": [
+        "a photo of a leather garment",
+        "a product photo of clothing made of faux leather",
+        "a garment made of suede",
+        "a close-up of leather material",
+        "a leather jacket or vegan leather piece"
+      ]
+    },
+    "silk_satin": {
+      "display": "silk or satin",
+      "prompts": [
+        "a photo of a silk garment",
+        "a product photo of clothing made of satin",
+        "a garment made of shiny silk",
+        "a close-up of smooth satin fabric",
+        "a silky draped piece of clothing"
+      ]
+    },
+    "linen": {
+      "display": "linen",
+      "prompts": [
+        "a photo of a linen garment",
+        "a product photo of clothing made of linen",
+        "a garment made of crinkled linen",
+        "a close-up of textured linen fabric",
+        "a breathable linen summer piece of clothing"
+      ]
+    }
+  },
+  "thresholds": {
+    "_status": "PROVISIONAL. Conservative placeholders chosen before any measurement. Not tuned on data. Revisit after a labeled eval with enough items.",
+    "provisional": true,
+    "min_score": 0.45,
+    "min_margin": 0.15,
+    "medium_score": 0.7,
+    "medium_margin": 0.35
+  },
+  "composition_mapping": {
+    "_rule": "Drop unlabeled clauses (split on . ; bullets and HTML tags) that mention lining, liner, yoke, pocket or trim, for example '100% polyester taffeta yoke and sleeve lining'. Then parse the main fabric with backend/services/composition.py parse_composition (shell or body section, not a labeled lining or trim section). Sum the percentages per group using fiber_to_group. The stated group is the group with the largest sum when that sum is strictly above 50 percent. Otherwise the stated group is 'ambiguous' and the item is left out of accuracy (it is still stored). A fiber not listed below makes the item 'ambiguous'.",
+    "majority_pct": 50,
+    "fiber_to_group": {
+      "cotton": "cotton_denim",
+      "wool": "wool_knit",
+      "cashmere": "wool_knit",
+      "alpaca": "wool_knit",
+      "mohair": "wool_knit",
+      "polyester": "synthetic",
+      "nylon": "synthetic",
+      "spandex": "synthetic",
+      "acrylic": "synthetic",
+      "acetate": "synthetic",
+      "rayon": "synthetic",
+      "modal": "synthetic",
+      "lyocell": "synthetic",
+      "polyurethane": "leather_or_faux",
+      "leather": "leather_or_faux",
+      "silk": "silk_satin",
+      "linen": "linen",
+      "hemp": "linen"
+    },
+    "ambiguous_cases": [
+      "Acrylic knit sweaters are mapped to synthetic by fiber, but they look like wool_knit in a photo. Expect misses here; they are fiber-correct labels, not photo-correct labels.",
+      "Rayon, modal and lyocell are plant-based but man-made. They are mapped to synthetic. A rayon satin blouse may look like silk_satin.",
+      "Polyurethane is mapped to leather_or_faux. When PU is a coating on a polyester base the stated percentages may list polyester as the majority, which maps to synthetic.",
+      "Satin is a weave, not a fiber. Polyester satin maps to synthetic, not silk_satin.",
+      "Denim is a weave of cotton, so it is in cotton_denim. Stretch denim with 2 percent spandex is still cotton_denim by majority.",
+      "Hemp is mapped to linen (both bast fibers). A hemp and cotton denim shirt is labeled linen by fiber, though it looks like denim.",
+      "Blends with no fiber group above 50 percent (for example 50 percent cotton, 50 percent polyester) are ambiguous and left out of accuracy."
+    ]
+  }
+}

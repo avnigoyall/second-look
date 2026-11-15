@@ -1,0 +1,13 @@
+{
+  "description": "Hard-coded editorial labels (hackathon decision). These are team judgment, not Radar data. They set final_label only, never lifespan fields, never trend documents, and are excluded from agreement statistics.",
+  "display": "Editorial label (team judgment, not Radar data)",
+  "labels": [
+    {"term": "plain black tee", "final_label": "established", "confidence": "medium", "source_text": "Claude judgment, unverified"},
+    {"term": "mid rise jeans", "final_label": "established", "confidence": "medium", "source_text": "Claude judgment, unverified"},
+    {"term": "mesh flats", "final_label": "micro_trend", "confidence": "low", "source_text": "Claude judgment, unverified"},
+    {"term": "micro bag", "final_label": "micro_trend", "confidence": "low", "source_text": "Claude judgment, unverified; probably past peak"},
+    {"term": "balloon jeans", "final_label": "micro_trend", "confidence": "low", "source_text": "Claude judgment, unverified; probably past peak"},
+    {"term": "slim sneakers", "final_label": "still_active", "confidence": "low", "source_text": "Team judgment (Hiresh)"},
+    {"term": "soft suiting", "final_label": "established", "confidence": "low", "source_text": "Team judgment (Hiresh)"}
+  ]
+}

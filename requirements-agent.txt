@@ -1,0 +1,5 @@
+# Local-only extras for the photo material estimate (backend/services/materials_photo.py).
+# Not needed by the API unless MATERIALS_PHOTO_ENABLED=1. Model: patrickjohncyh/fashion-clip (605 MB download).
+# Install on top of backend/requirements.txt: pip install -r backend/requirements.txt -r requirements-agent.txt
+torch==2.15.0
+transformers==5.23.0

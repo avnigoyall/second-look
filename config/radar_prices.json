@@ -1,0 +1,43 @@
+{
+  "description": "Per-million-token prices (USD) for paid calls made by the Radar agent and its tools. Copied from official provider pages on the fetch date. A model that is missing or has a null price is refused by scripts/radar_spend.py.",
+  "providers": {
+    "claude": {
+      "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "model_ids_source_url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "fetched_at": "2026-11-14",
+      "notes": "Standard (global) pricing, Messages API, not Batch, not fast mode, not inference_geo US-only (1.1x). Haiku 5.5 has two tiers split at 100,000 prompt tokens (input plus cache write plus cache read tokens).",
+      "models": {
+        "claude-haiku-5-5": {
+          "tiers": [
+            {"max_prompt_tokens": 100000, "input_per_mtok": 0.10, "cache_write_5m_per_mtok": 0.125, "cache_write_1h_per_mtok": 0.20, "cache_read_per_mtok": 0.01, "output_per_mtok": 0.50},
+            {"max_prompt_tokens": null, "input_per_mtok": 0.50, "cache_write_5m_per_mtok": 0.625, "cache_write_1h_per_mtok": 1.00, "cache_read_per_mtok": 0.05, "output_per_mtok": 2.50}
+          ]
+        },
+        "claude-sonnet-5-5": {
+          "tiers": [
+            {"max_prompt_tokens": null, "input_per_mtok": 2.00, "cache_write_5m_per_mtok": 2.50, "cache_write_1h_per_mtok": 4.00, "cache_read_per_mtok": 0.10, "output_per_mtok": 10.00}
+          ]
+        },
+        "claude-opus-5-5": {
+          "tiers": [
+            {"max_prompt_tokens": null, "input_per_mtok": 4.00, "cache_write_5m_per_mtok": 5.00, "cache_write_1h_per_mtok": 8.00, "cache_read_per_mtok": 0.20, "output_per_mtok": 20.00}
+          ]
+        }
+      }
+    },
+    "vultr": {
+      "source_url": "https://docs.vultr.com/support/products/serverless/how-do-i-monitor-the-usage-and-cost-of-my-vultr-serverless-inference-subscription",
+      "fetched_at": "2026-11-14",
+      "page_updated": "2026-10-26",
+      "notes": "The page states Serverless Inference requests are billed at $0.55 per 1M input tokens and $2.75 per 1M output tokens. It has no embedding-specific line. For qwen3-embedding-4b the ledger charges every token at the higher $2.75 rate, an upper bound from the same page (the same conservative rate the existing embed guard uses). www.vultr.com/pricing returned HTTP 403 to the fetch.",
+      "models": {
+        "qwen3-embedding-4b": {
+          "tiers": [
+            {"max_prompt_tokens": null, "input_per_mtok": 2.75, "cache_write_5m_per_mtok": null, "cache_write_1h_per_mtok": null, "cache_read_per_mtok": null, "output_per_mtok": 2.75}
+          ],
+          "basis": "upper bound: published output rate applied to input tokens, no embedding price published"
+        }
+      }
+    }
+  }
+}
