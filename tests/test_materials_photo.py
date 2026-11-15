@@ -158,6 +158,9 @@ class CompositionMappingTests(unittest.TestCase):
             "55% Linen, 45% Cotton": "linen",
             "100% Silk": "silk_satin",
             "50% Cotton, 50% Polyester": "ambiguous",
+            "Goat suede. 3-oz. 100% polyester taffeta yoke and sleeve lining. Single chest pocket.": None,
+            "<li>Body: 100% Cowhide Leather</li><li>Lining: 90% Wool, 10% Polyamide</li>": "leather_or_faux",
+            "100% linen. Pockets lined in 100% cotton.": "linen",
             "Soft and comfy": None,
         }
         for text, expected in cases.items():

@@ -72,7 +72,7 @@
     "medium_margin": 0.35
   },
   "composition_mapping": {
-    "_rule": "Parse the main fabric with backend/services/composition.py parse_composition (shell or body section, not lining or trim). Sum the percentages per group using fiber_to_group. The stated group is the group with the largest sum when that sum is strictly above 50 percent. Otherwise the stated group is 'ambiguous' and the item is left out of accuracy (it is still stored). A fiber not listed below makes the item 'ambiguous'.",
+    "_rule": "Drop unlabeled clauses (split on . ; bullets and HTML tags) that mention lining, liner, yoke, pocket or trim, for example '100% polyester taffeta yoke and sleeve lining'. Then parse the main fabric with backend/services/composition.py parse_composition (shell or body section, not a labeled lining or trim section). Sum the percentages per group using fiber_to_group. The stated group is the group with the largest sum when that sum is strictly above 50 percent. Otherwise the stated group is 'ambiguous' and the item is left out of accuracy (it is still stored). A fiber not listed below makes the item 'ambiguous'.",
     "majority_pct": 50,
     "fiber_to_group": {
       "cotton": "cotton_denim",
@@ -100,6 +100,7 @@
       "Polyurethane is mapped to leather_or_faux. When PU is a coating on a polyester base the stated percentages may list polyester as the majority, which maps to synthetic.",
       "Satin is a weave, not a fiber. Polyester satin maps to synthetic, not silk_satin.",
       "Denim is a weave of cotton, so it is in cotton_denim. Stretch denim with 2 percent spandex is still cotton_denim by majority.",
+      "Hemp is mapped to linen (both bast fibers). A hemp and cotton denim shirt is labeled linen by fiber, though it looks like denim.",
       "Blends with no fiber group above 50 percent (for example 50 percent cotton, 50 percent polyester) are ambiguous and left out of accuracy."
     ]
   }

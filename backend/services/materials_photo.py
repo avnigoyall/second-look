@@ -18,6 +18,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -59,10 +60,25 @@ def enabled() -> bool:
 
 # ---------- composition -> stated group (eval labels) ----------
 
+_SECONDARY_WORDS = re.compile(r"\b(lining|linings|liner|yoke|pocket(?:ing)?s?|trim)\b", re.I)
+_LABELED_SECTION = re.compile(r"\b(lining|linings|liner|yoke|pocket(?:ing)?s?|trim)\s*[:\-]", re.I)
+
+
+def _main_fabric_text(composition: str) -> str:
+    """Drop unlabeled clauses about secondary parts ("100% polyester taffeta yoke and sleeve lining").
+    Clauses with a labeled section ("Lining: 100% polyester") are kept: parse_composition handles those."""
+    text = re.sub(r"<[^>]+>", ". ", composition)
+    clauses = re.split(r"[.;•\n]+", text)
+    return ". ".join(c for c in clauses
+                     if not (_SECONDARY_WORDS.search(c) and not _LABELED_SECTION.search(c)))
+
+
 def stated_group(composition: str | None, config: dict = CONFIG) -> str | None:
     """Coarse group from stated composition text by the documented majority rule. None when nothing parses,
     "ambiguous" when no group is above majority_pct or a fiber is unmapped."""
-    fibers = parse_composition(composition)
+    if not composition:
+        return None
+    fibers = parse_composition(_main_fabric_text(composition))
     if not fibers:
         return None
     mapping = config["composition_mapping"]
