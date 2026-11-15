@@ -1,0 +1,10 @@
+# Photon friend reply notes
+
+1. Files: `backend/services/friend_reply.py`, `backend/routers/photon_friend.py` (POST /photon/friend-reply), `imessage/src/friend.mjs`, `imessage/src/friend.test.mjs`, `tests/test_photon_friend.py`, `scripts/photon_friend_demo.py`, `docs/photon_friend_transcripts.md`. Shared one-liners: router registered in `backend/main.py`, flag in `.env.example` and `scripts/demo_up.sh`.
+2. The one hook in Avni's `imessage/src/handle-message.mjs` (an import plus the verdict send): `+import { friendReply } from "./friend.mjs";` and `-    await send(res.message);` becomes `+    await send(await friendReply({ phone, text, hasImage: true, verdict: res.verdict, verdictId: res.verdict_id, existing: res.message }));`
+3. Toggle: `PHOTON_FRIEND_MODE=1` in the backend env (`scripts/demo_up.sh` sets it for the demo shell only). Committed default is 0. The backend flag is the only switch: with it off, the endpoint returns the existing reply unchanged.
+4. Safety: code maps the verdict to allowed leans (good_buy: buy or try on; have_this_look and micro_trend: skip or try on). A lean outside that set, an error, a 3 s timeout, a missing key or model, or a budget refusal (scripts/radar_spend.py ledger) returns the existing reply with used_fallback true. Node also falls back on any error or after 3.5 s.
+5. Code, not Claude, appends the Bluesky radar line (only for micro_trend, still_active or established with a matched style) and the materials line, verbatim and once. Replies are trimmed to 4 sentences total. A reply that names Bluesky by itself is rejected.
+6. In the live hook, radar and materials_line are null (/imessage/analyze does not return them, and materials still go in the separate details text). Verdict reason and closet come from the stored verdict and closet by verdict_id.
+7. Revert: set `PHOTON_FRIEND_MODE=0`, or revert the commit on feat/photon-friend (restores the original `await send(res.message);`).
+8. Measured latency, real model (claude-haiku-5-5, in-process endpoint, 5 scenarios): 1212, 1276, 1653, 1455, 1449 ms (median 1449, 0 fallbacks). Flag off: median 1.5 ms, max 11.1 ms over 20 calls.

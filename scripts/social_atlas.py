@@ -2,8 +2,8 @@
 
 Inputs: social_posts, social_communities, social_trends, the Claude name cache in
 social_graph_meta, config/social_terms.json, and the full edge list written by
-`social_graph.py --edges-out`. Output: .social_runs/social_atlas.json plus per-author details in
-.social_runs/social_atlas_authors.json (both git-ignored).
+`social_graph.py --edges-out`. Output: data/social_atlas/social_atlas.json plus per-author details in
+data/social_atlas/social_atlas_authors.json. Both are committed so the explorer works from a fresh clone.
 
 Privacy: authors appear only as hash prefixes. Snippets pass sanitize_snippet (no handles,
 no links, at most 160 characters) and link to DID-based post URLs. Counts are sampled
@@ -198,8 +198,8 @@ def build(posts, communities, trends, claude_named, terms_config, edges, window)
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--edges", type=Path, default=ROOT / ".social_runs" / "social_graph_edges.json")
-    parser.add_argument("--output", type=Path, default=ROOT / ".social_runs" / "social_atlas.json")
-    parser.add_argument("--authors-output", type=Path, default=ROOT / ".social_runs" / "social_atlas_authors.json",
+    parser.add_argument("--output", type=Path, default=ROOT / "data" / "social_atlas" / "social_atlas.json")
+    parser.add_argument("--authors-output", type=Path, default=ROOT / "data" / "social_atlas" / "social_atlas_authors.json",
                         help="Per-author details, served one author at a time")
     args = parser.parse_args(argv)
     if not args.edges.exists():
