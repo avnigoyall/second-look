@@ -185,6 +185,7 @@ Endpoints
 | `POST /closet/ownership-answer` | `{attributes, name?}` adds an owned item |
 | `GET /settings`, `PATCH /settings` | `{auto_add_purchases: bool}` default `true` |
 | `GET /closet-ui` | review page (grid, editable dropdowns, Save all) |
+| `DELETE /closet/{item_id}` | delete one of your own closet items (Avni, Nov 14). Returns `{ok}` |
 
 Candidate (`CandidateItem`): `id, origin photo|video|text, name, attributes, description, confidence 0..1, low_confidence, image_index, frame, box_2d [ymin,xmin,ymax,xmax] 0..1000, brand_visible, seen_count, thumbnail, likely_duplicate_of {id, name, score}`. `likely_duplicate_of` exists on candidates only, it is not stored.
 
@@ -319,6 +320,10 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 
 ### Card after an action (Part 6)
 - Buttons follow the verdict (Avni's UI refresh): good_buy highlights "Buy it" first and focuses it, with "Skip it anyway" second; have_this_look and micro_trend keep "Skip it" first, then "Buy anyway". Both skip buttons send `skipped`, both buy buttons send `bought`.
+- Hold add-to-cart until Buy (Avni, merged Nov 14): the store's add-to-cart click is held while the card is open. Buy releases it to the store (`bag: "added"`, or `"missing"` when the store re-rendered its button, with a "press the add button again" notice); Skip drops it (`bag: "not_added"`). The card closes at once on either button and the page blur goes away. The action is still sent once in the background. A failed check always lets the click through.
+- After Skip the result shows in the notice: "Skipped. $X moved to savings", "Skipped. Savings update pending" or "Skipped. No price, so nothing moved", plus the savings goal line. Buy shows no savings notice.
+- Full analysis (Avni): `POST /analyze/details` returns `AnalysisDetails` (materials and material health from `backend/config/material_health.json` and `backend/services/composition.py`, lifespan, cost per wear, outfits; `backend/services/analysis_details.py`). The card loads it after the verdict ("Loading full analysis...") and adds a block above the buttons; failures remove the block quietly.
+- Theme (Avni, closet redesign): brown and beige editorial theme with serif headings on the card, popup and closet pages; new hanger icons.
 - Popup (Avni's UI refresh): hanger logo, dark purple theme. On a product page it shows the check and Diagnose tools; elsewhere it shows the savings summary from `GET /impact`, with "Check this page anyway" to reveal the tools. Signup takes an optional phone.
 - Skip it with `transfer.status == "done"` and an amount: "Skipped. $X moved to savings" with a check. `no_price`: "Skipped. No price, so nothing moved". Anything else (pending, failed, no transfer field, timeout): "Skipped. Savings update pending". On a timeout the buttons stay disabled, since the skip may have landed. Buy anyway: unchanged ("Marked as bought").
 
@@ -330,7 +335,8 @@ Old verdict docs with a null alternative url get a store search link when `/dash
 ## 11. Testing and isolation
 
 - `DB_NAME` is hardcoded to `secondlook`, so agents isolate by test user: sign up `test_<part>@secondlook.test` and use that account. Never write test data to the demo user. `[PROPOSED]` small change: read `DB_NAME` from env, so a sub-agent can use its own database.
-- Last known results after the Photon auto-assignment merge: unittest 222/222, card harness 73/73, popup harness all pass, iMessage Node tests 7/7, extension E2E 66/66 with 2 SKIP.
+- Last known results after merging Social Radar and Avni's full analysis and closet redesign (Nov 14): unittest 440/440, card harness 97/97, popup harness all pass, social harness 39/39, goal harness 70/70, iMessage Node tests 7/7. Extension E2E not run: both Gemini keys were unusable (current key disabled, previous key over its daily quota).
+- Earlier: after the Photon auto-assignment merge: unittest 222/222, card harness 73/73, popup harness all pass, iMessage Node tests 7/7, extension E2E 66/66 with 2 SKIP.
 - Earlier: after the Nov 14 fixes merge (polish, quick-add, wording, speed, account chat): unittest 199/199, card harness 73/73, iMessage routing 5/5, extension E2E 66/66 with 2 SKIP.
 - Earlier: after merging Avni's popup refresh and phone signup: unittest 147/147, card harness 73/73, extension E2E 66/66 with 2 SKIP.
 - Earlier: after the Claude price tier merge: unittest 147/147, price checks 23 plus 18 window checks, extension E2E 65/65 with 2 SKIP.
@@ -364,7 +370,7 @@ Optional. Skipping works the same with or without a goal. One goal per user, no 
 - All datetimes serialize with "Z" (already true for every API datetime since Nov 14).
 
 ### UI
-- Card (extension): after a successful skip, when `goal` is present, one extra line under the skip message: `"$340 of $2,000 for <name>"`, or `"<name>: you made it"` when reached. No goal: card unchanged. No new buttons.
+- Card (extension): after a successful skip, when `goal` is present, one extra line under the skip message: `"$340 of $2,000 for <name>"`, or `"<name>: you made it"` when reached. No goal: card unchanged. No new buttons. Since the Nov 14 merge of Avni's redesign the card closes on Skip, so the skip message and this goal line show in the notice that appears after the card closes (main line plus a smaller second line).
 - Dashboard: `dashboard/goal.js` and `dashboard/goal.css`, mounted by one include in `dashboard/index.html` (Avni owns that file). No goal: one "Set a goal" button at the top. Goal set: a mini bar (`role="progressbar"`, `aria-valuenow`, `aria-valuemin`, `aria-valuemax`) with "$340 / $2,000" inside and a small edit icon beside it. The edit icon opens a small panel (name, target, Save, Delete); Delete asks "Are you sure?" inline, never a browser dialog. Clicking the bar expands a scrollable list of skipped items (photo or neutral tile, name, store, price, date). Reached: the bar fills and reads "<name>: you made it", with one small CSS celebration the first time the UI sees it in a session. A failed `/goal` call hides the component and never breaks the page.
 
 ### Built (feat/goal, Nov 14), with deviations
@@ -427,6 +433,10 @@ Optional. Skipping works the same with or without a goal. One goal per user, no 
 | 14 | Phones added to Photon by hand in the dashboard | Auto-assignment at signup and `POST /imessage/connect`, `GET /imessage/status`; no invite email; replies from the receiving line | Contract (additive) |
 | 14 | A yes could answer an old verdict that never asked | `ask_ownership` stored; `/own` answers only the latest verdict that asked | Code |
 | 15 | No savings goal | Goal endpoints, `/action` goal field (skipped only), card line, dashboard component, demo seeding script | Contract (additive) |
+| 7 | Card stays open after an action; status inside the card | Avni: add-to-cart held until Buy, card closes at once, savings result and goal line in the notice | Contract |
+| 7 | No full analysis | Avni: `POST /analyze/details`, card analysis block, `/imessage/details` second text | Contract (additive) |
+| 5 | No closet delete | Avni: `DELETE /closet/{item_id}`, closet redesign with a wardrobe button | Contract (additive) |
+| 0 | No social radar | Social Radar (Bluesky ingest, Vultr embeddings, graph, metrics, eval, `/social`, `trends-ui`); see its section at the top of this file | Contract (additive) |
 | 7 | Card buttons always "Skip it" then "Buy anyway" | Avni: good_buy shows "Buy it" first and highlighted, then "Skip it anyway". Card harness and E2E updated | Contract |
 
 ## 13. Open items
@@ -466,3 +476,4 @@ Main agent notes (merged from `feat/photon-imessage-agent` on Nov 14):
 - User doc fields: `photon_assignment_id`, `photon_line`, `photon_handle` (the phone the line was assigned for; an assignment only counts while it equals the current phone), `photon_opt_in`, `photon_assigned_at`, `photon_checked_at`, `photon_error`, `photon_assigning_at`. Changing the phone does not release the old seat.
 - Popup states: assigning, "Text Second Look at <line> to start" (an `sms:` link), "iMessage connected", a Connect button (with a phone field when the account has none), and an error line with Try again.
 - Agent replies from the line that received each message (`msg.receivedBy.id`), falling back to the agent handle.
+- Full analysis over iMessage (Avni): `POST /imessage/details {phone, verdict_id}` (agent secret) returns `{message}`, the full analysis as plain text for a verdict from `/imessage/analyze`. The agent sends the verdict, then the full analysis as a second text, then "Do you already own this?" last, all from the line that received the photo.
