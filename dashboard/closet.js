@@ -319,36 +319,149 @@
     loadCloset();
   }
 
-  // ---------- closet list ----------
+  // ---------- closet gallery ----------
+  const TRASH_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>';
+  const UNDO_MS = 5000;
+  const ROTATE_MS = 3500;
+  let pending = null; // { li, next, id, timer }: a delete waiting out its undo window
+  let rotateTimer = null;
+  let paused = false;
+
+  function setCount() {
+    const n = $("closet").querySelectorAll(".mini:not(.removing)").length;
+    $("closet-count").textContent = n ? `(${n})` : "";
+    $("closet-empty").hidden = n > 0;
+    updateNav();
+  }
+
+  function tile(it) {
+    const li = document.createElement("li");
+    li.className = "mini";
+    li.dataset.id = it.id;
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    if (it.image_data) {
+      const img = document.createElement("img");
+      img.src = it.image_data; img.alt = it.name; img.loading = "lazy";
+      thumb.append(img);
+    } else {
+      thumb.append(Object.assign(document.createElement("span"), { className: "thumb-text", textContent: "No photo" }));
+    }
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "trash";
+    del.innerHTML = TRASH_ICON;
+    del.setAttribute("aria-label", `Delete ${it.name}`);
+    del.title = "Delete";
+    del.addEventListener("click", () => removePiece(li, it));
+    thumb.append(del);
+    const name = Object.assign(document.createElement("span"), { className: "mini-name", textContent: it.name, title: it.name });
+    const meta = Object.assign(document.createElement("span"), {
+      className: "mini-meta",
+      textContent: it.status === "incoming" ? "Incoming" : (it.attributes?.category || ""),
+    });
+    li.append(thumb, name, meta);
+    return li;
+  }
+
   async function loadCloset() {
     try {
       const { items } = await api("/closet?include_images=1");
-      $("closet-count").textContent = items.length ? `(${items.length})` : "";
-      $("closet-empty").hidden = items.length > 0;
-      $("closet").replaceChildren(...items.slice().reverse().map((it) => {
-        const li = document.createElement("li");
-        li.className = "mini";
-        const thumb = document.createElement("div");
-        thumb.className = "thumb";
-        if (it.image_data) {
-          const img = document.createElement("img");
-          img.src = it.image_data; img.alt = it.name; img.loading = "lazy";
-          thumb.append(img);
-        } else {
-          thumb.append(Object.assign(document.createElement("span"), { className: "thumb-text", textContent: "No photo" }));
-        }
-        const name = Object.assign(document.createElement("span"), { className: "mini-name", textContent: it.name });
-        const meta = Object.assign(document.createElement("span"), {
-          className: "mini-meta",
-          textContent: it.status === "incoming" ? "Incoming" : (it.attributes?.category || ""),
-        });
-        li.append(thumb, name, meta);
-        return li;
-      }));
+      $("closet").replaceChildren(...items.slice().reverse().map(tile));
+      setCount();
+      startRotation();
     } catch (e) {
       handleAuthError(e);
     }
   }
+
+  // Delete with undo: the piece leaves the gallery at once; the DELETE is sent after the undo window.
+  function removePiece(li, it) {
+    if (pending) commitDelete(); // one undo at a time: finish the previous delete now
+    const next = li.nextSibling;
+    li.classList.add("removing");
+    setTimeout(() => { if (li.classList.contains("removing")) li.remove(); setCount(); }, 260);
+    pending = { li, next, id: it.id, timer: setTimeout(commitDelete, UNDO_MS) };
+    $("undo-text").textContent = `Removed ${it.name}.`;
+    $("undo-bar").hidden = false;
+    setCount();
+  }
+
+  async function commitDelete() {
+    if (!pending) return;
+    const { id, li, next, timer } = pending;
+    pending = null;
+    clearTimeout(timer);
+    $("undo-bar").hidden = true;
+    try {
+      await api(`/closet/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch (e) {
+      if (handleAuthError(e)) return;
+      // Not deleted on the server: put it back so the gallery stays true.
+      li.classList.remove("removing");
+      $("closet").insertBefore(li, next && next.isConnected ? next : null);
+      setCount();
+      alert(`Could not delete ${li.querySelector(".mini-name")?.textContent || "this item"}. Try again.`);
+    }
+  }
+
+  $("undo").addEventListener("click", () => {
+    if (!pending) return;
+    const { li, next, timer } = pending;
+    pending = null;
+    clearTimeout(timer);
+    li.classList.remove("removing");
+    if (!li.isConnected) $("closet").insertBefore(li, next && next.isConnected ? next : null);
+    $("undo-bar").hidden = true;
+    setCount();
+  });
+  // Leaving the page during the undo window still deletes (keepalive survives the unload).
+  window.addEventListener("pagehide", () => {
+    if (!pending) return;
+    const token = getToken();
+    fetch(`/closet/${encodeURIComponent(pending.id)}`, { method: "DELETE", keepalive: true,
+      headers: token ? { Authorization: "Bearer " + token } : {} });
+    pending = null;
+  });
+
+  // Rotating gallery: one piece every ROTATE_MS, back to the start at the end. Paused on hover, focus or
+  // touch, when everything fits, and when the shopper prefers reduced motion.
+  const gallery = () => $("closet");
+  const step = () => (gallery().querySelector(".mini")?.getBoundingClientRect().width || 180) + 16;
+  const overflowing = () => gallery().scrollWidth - gallery().clientWidth > 4;
+
+  function updateNav() {
+    const show = overflowing();
+    $("gallery-prev").hidden = !show;
+    $("gallery-next").hidden = !show;
+  }
+
+  function move(dir) {
+    const g = gallery();
+    const atEnd = g.scrollLeft + g.clientWidth >= g.scrollWidth - 4;
+    const atStart = g.scrollLeft <= 4;
+    if (dir > 0 && atEnd) g.scrollTo({ left: 0, behavior: "smooth" });
+    else if (dir < 0 && atStart) g.scrollTo({ left: g.scrollWidth, behavior: "smooth" });
+    else g.scrollBy({ left: dir * step(), behavior: "smooth" });
+  }
+
+  function startRotation() {
+    clearInterval(rotateTimer);
+    updateNav();
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    rotateTimer = setInterval(() => { if (!paused && !document.hidden && overflowing()) move(1); }, ROTATE_MS);
+  }
+
+  const g0 = gallery();
+  g0.addEventListener("mouseenter", () => { paused = true; });
+  g0.addEventListener("mouseleave", () => { paused = false; });
+  g0.addEventListener("focusin", () => { paused = true; });
+  g0.addEventListener("focusout", () => { paused = false; });
+  g0.addEventListener("touchstart", () => { paused = true; }, { passive: true });
+  $("gallery-prev").addEventListener("click", () => move(-1));
+  $("gallery-next").addEventListener("click", () => move(1));
+  window.addEventListener("resize", updateNav);
+
 
   // ---------- boot ----------
   async function boot() {
@@ -387,6 +500,14 @@
       btn.disabled = false;
     }
   });
+
+  // Opened from the extension popup ("View my wardrobe"): the login token comes in the URL fragment, which the
+  // browser never sends to a server. Save it, then clear it from the address bar right away.
+  const handoff = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (handoff) {
+    setToken(handoff);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
 
   getToken() ? boot() : show("login-view");
 })();

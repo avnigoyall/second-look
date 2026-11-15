@@ -1,15 +1,15 @@
 :root {
-  --bg: #f8f6fb; --card: #ffffff; --ink: #1e1a24; --muted: #6a6275; --line: #e3dcec; --soft: #f0ecf6;
-  --accent: #4b2a7b; --accent-ink: #ffffff; --danger: #a33a2b;
-  --have: #3b5ba5; --trend: #a8620a; --good: #2f7d4f;
+  --bg: #f6f1ea; --card: #fffcf7; --ink: #2a221c; --muted: #6f6154; --line: #e4d9cb; --soft: #efe6da;
+  --accent: #3f2e22; --accent-ink: #faf6f0; --danger: #9a3b2b;
+  --have: #4e6577; --trend: #8f6026; --good: #566b41;
   --img-outline: oklch(0 0 0 / 0.1);
   --shadow: 0px 0px 0px 1px oklch(0 0 0 / 0.06), 0px 1px 2px -1px oklch(0 0 0 / 0.06), 0px 2px 4px 0px oklch(0 0 0 / 0.04);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #15121b; --card: #1e1a26; --ink: #f2eef7; --muted: #a69db2; --line: #3a3244; --soft: #28222f;
-    --accent: #b79cf0; --accent-ink: #1e1230; --danger: #e07a6a;
-    --have: #8aa6e8; --trend: #e6a454; --good: #6cc495;
+    --bg: #16120f; --card: #201a16; --ink: #f2ebe2; --muted: #ab9c8d; --line: #3a3029; --soft: #2a221c;
+    --accent: #c9a582; --accent-ink: #1c150f; --danger: #e08a76;
+    --have: #9fb3c4; --trend: #d9aa6a; --good: #a6bd8a;
     --img-outline: oklch(1 0 0 / 0.1);
     --shadow: 0px 0px 0px 1px oklch(1 0 0 / 0.08), 0px 1px 2px -1px oklch(0 0 0 / 0.3), 0px 2px 4px 0px oklch(0 0 0 / 0.2);
   }
@@ -89,6 +89,8 @@ button.link:not(:disabled):active { scale: 1; }
 sub { font-size: 0.75em; line-height: 0; }
 .sources a { color: var(--accent); }
 .summary.loading .stat-value { opacity: 0.4; }
+button.wardrobe { display: flex; align-items: center; justify-content: center; gap: 8px; }
+button.wardrobe svg { width: 18px; height: 18px; flex: none; }
 
 .status { font-size: 12px; color: var(--muted); min-height: 1.45em; }
 .status.error { color: var(--danger); }
@@ -106,3 +108,22 @@ pre {
   user-select: text;
 }
 [hidden] { display: none !important; }
+
+/* ---------- editorial theme (brown / beige, serif headings, square buttons) ---------- */
+:root { --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif; }
+.brand { font-family: var(--serif); font-weight: 600; font-size: 17px; letter-spacing: 0.06em; text-transform: uppercase; }
+h2 { font-family: var(--serif); font-size: 17px; font-weight: 600; letter-spacing: 0; }
+button { border-radius: 3px; }
+button.primary, button.secondary { text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; padding: 11px 14px; }
+button.secondary { background: transparent; border-color: var(--accent); color: var(--accent); }
+@media (hover: hover) { button.secondary:not(:disabled):hover { background: var(--soft); } }
+button.ghost.small { border-radius: 3px; text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; }
+.stat { border-radius: 4px; box-shadow: none; border: 1px solid var(--line); background: var(--card); }
+.stat-value { font-family: var(--serif); font-weight: 600; letter-spacing: 0; color: var(--ink); }
+.stat-money { background: var(--accent); border-color: var(--accent); }
+.stat-money .stat-label { color: color-mix(in oklch, var(--accent-ink), transparent 25%); text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; }
+.stat-money .stat-value { color: var(--accent-ink); }
+.stat-carbon .stat-label { text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; }
+.stat-carbon .stat-value { color: var(--good); }
+.tag { border-radius: 2px; text-transform: uppercase; letter-spacing: 0.08em; }
+input { border-radius: 3px; }

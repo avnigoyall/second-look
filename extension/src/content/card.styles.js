@@ -6,9 +6,9 @@
     :host { all: initial; }
 
     .sl {
-      --bg: #ffffff; --ink: #1e1a24; --muted: #6a6275; --line: #e3dcec; --soft: #f3f0f8;
-      --accent: #4b2a7b; --accent-ink: #ffffff; --danger: #a33a2b; --danger-soft: #fbeeeb;
-      --have: #3b5ba5; --trend: #a8620a; --good: #2f7d4f;
+      --bg: #fffcf7; --ink: #2a221c; --muted: #6f6154; --line: #e4d9cb; --soft: #efe6da;
+      --accent: #3f2e22; --accent-ink: #faf6f0; --danger: #9a3b2b; --danger-soft: #f6e7e2;
+      --have: #4e6577; --trend: #8f6026; --good: #566b41;
       --img-outline: oklch(0 0 0 / 0.1);
       --shadow:
         0px 0px 0px 1px oklch(0 0 0 / 0.06),
@@ -21,9 +21,9 @@
     }
     @media (prefers-color-scheme: dark) {
       .sl {
-        --bg: #1e1a26; --ink: #f2eef7; --muted: #a69db2; --line: #3a3244; --soft: #28222f;
-        --accent: #b79cf0; --accent-ink: #1e1230; --danger: #e07a6a; --danger-soft: #3a2420;
-        --have: #8aa6e8; --trend: #e6a454; --good: #6cc495;
+        --bg: #201a16; --ink: #f2ebe2; --muted: #ab9c8d; --line: #3a3029; --soft: #2a221c;
+        --accent: #c9a582; --accent-ink: #1c150f; --danger: #e08a76; --danger-soft: #3a2520;
+        --have: #9fb3c4; --trend: #d9aa6a; --good: #a6bd8a;
         --img-outline: oklch(1 0 0 / 0.1);
         --shadow:
           0px 0px 0px 1px oklch(1 0 0 / 0.08),
@@ -48,7 +48,7 @@
     /* Blurs and dims the store behind the Buy / Skip verdict. Sits under the card (DOM order). */
     .backdrop {
       position: fixed; inset: 0; pointer-events: auto;
-      background: oklch(0.2 0.03 300 / 0.28);
+      background: oklch(0.22 0.025 55 / 0.30); /* warm espresso veil */
       -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
       opacity: 1; transition: opacity 200ms ease-out;
     }
@@ -276,5 +276,19 @@
     @media (prefers-reduced-motion: no-preference) {
       .notice[data-entering], .notice[data-leaving] { translate: 0 -12px; }
     }
+
+    /* ---------- editorial theme (brown / beige, serif headings, square buttons) ---------- */
+    .sl { --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif; }
+    .card { border-radius: 6px; }
+    .brand { font-family: var(--serif); font-size: 13px; letter-spacing: 0.14em; color: var(--ink); }
+    .item-name { font-family: var(--serif); font-size: 16px; font-weight: 600; }
+    .reason { font-family: var(--serif); font-size: 16px; line-height: 1.45; }
+    .badge { border-radius: 2px; text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; }
+    button.btn { border-radius: 3px; }
+    .row button.btn.primary, .row button.btn.secondary { text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+    .row button.btn.secondary { background: transparent; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
+    .analysis, .analysis summary { border-radius: 4px; }
+    .an-title { font-family: var(--serif); font-size: 15px; }
+    .tag, .an-rating { border-radius: 2px; }
   `;
 })(globalThis);

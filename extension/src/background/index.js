@@ -252,6 +252,14 @@ const handlers = {
   },
   CHECK_ACTIVE_TAB: checkActiveTab,
   PAGE_KIND: pageKind,
+  // "View my wardrobe" in the popup: open the closet page, already logged in (token in the URL fragment,
+  // which never reaches a server; the page stores it and clears it from the address bar).
+  OPEN_CLOSET: async () => {
+    const { token } = await SecondLookState.getState();
+    if (!token) throw new AppError("Log in from the Second Look popup first.", "auth");
+    await chrome.tabs.create({ url: `${API_BASE}/closet-ui#token=${encodeURIComponent(token)}` });
+    return { opened: true };
+  },
   IMPACT: () => api("/impact"),
   DIAGNOSE: diagnose,
   ANALYZE_ITEM: analyzeItem,

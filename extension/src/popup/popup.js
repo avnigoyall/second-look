@@ -144,6 +144,15 @@ $("signup-view").addEventListener("submit", async (e) => {
 // Fallback when a store page is not detected: show the product tools anyway.
 $("check-anyway").addEventListener("click", () => showProductTools(true));
 
+// Opens the closet page in a new tab, already logged in. The popup closes on its own when the tab opens.
+$("wardrobe").addEventListener("click", async () => {
+  try {
+    await send("OPEN_CLOSET");
+  } catch (err) {
+    setStatus("status", err.message, true);
+  }
+});
+
 $("to-signup").addEventListener("click", () => showAuth("signup"));
 $("to-login").addEventListener("click", () => showAuth("login"));
 
