@@ -5,9 +5,9 @@ Built from the stored verdict document, so it adds no Gemini attributes call. Pa
 - health notes: only from config/material_health.json (sourced), never from a model;
 - durability, lifespan and trend note: one Claude call (estimates, labeled as such on the card);
 - cost per wear: price / expected wears, rated with thresholds.json (cost_per_wear_good / _poor);
-- closet sentiment and 3 outfits, skipped when the closet is empty:
-    good_buy -> outfits pair the NEW item with closet pieces;
-    have_this_look / micro_trend -> outfits are built around the closet lookalike instead, not the new item;
+- wear-and-tear rating (good / fair / poor) with the durability note;
+- closet sentiment (skipped when the closet is empty) and up to 3 outfits that style the NEW item with closet
+  pieces and basic staples most people own; fewer than 3 means the piece is not versatile (`versatile`);
 - alternatives: general-purpose picks with store search links, only when cost efficiency is poor.
 Never raises for model, embedding or Atlas failures: what failed is listed in `errors`.
 """
@@ -37,7 +37,6 @@ MAX_ALTERNATIVES = 2
 MAX_HEALTH_NOTES = 3
 CLAUDE_TIMEOUTS_S = (10.0, 6.0)
 CLAUDE_MAX_TOKENS = 1500
-RECOMMENDED = "good_buy"
 
 SYSTEM_PROMPT = """You are Second Look's stylist and fabric analyst. A shopper checked one clothing item and already
 got a verdict. Give the deeper analysis behind it.
@@ -48,9 +47,15 @@ trend (a matched micro trend or null), and closet_candidates (the shopper's clos
 any category, with id, name, category, color, cut, style, score; score near 0.5 means unrelated).
 
 Fill the give_details tool:
-- durability: pilling_risk from the fibers and construction (synthetic-heavy knits and loose blends pill
-  sooner; long-staple cotton, wool blends and dense weaves less). note: one plain sentence on how it will hold
-  up. expected_wears: realistic number of wears before it looks worn, for this fabric and garment type.
+- durability: rating: overall wear and tear for this piece, "good" (holds up well for years of normal wear),
+  "fair" (some visible wear within a season or two) or "poor" (looks worn after a few washes).
+  pilling_risk from the fibers and construction (synthetic-heavy knits and loose blends pill sooner; long-staple cotton, wool blends and dense weaves less). note: one or two plain sentences on overall
+  wear and tear for this exact piece, naming the 1 to 3 problems most likely for its fabric, construction and
+  garment type and where they show up. Consider pilling, fading or dye loss (prints, dark or washed colors),
+  stretching or bagging out (knees, seat, waistband, necklines), shrinking, seams or hems fraying, thin knits
+  snagging or getting holes, printed or embroidered details cracking or loosening, and hardware breaking. Only
+  mention pilling when it is a real risk for this piece; never repeat the fiber percentages. Under 300
+  characters. expected_wears: realistic number of wears before it looks worn, for this fabric and garment type.
   expected_months: how many months the shopper will likely keep wearing it, considering both wear-out and, if a
   trend is given, how fast that trend fades. These are estimates; be realistic, not generous.
 - trend_note: only if trend is not null. One hedged sentence on longevity ("likely to feel dated soon").
@@ -59,11 +64,17 @@ Fill the give_details tool:
 - similar_ids: ids from closet_candidates with the same feel as the item: close color and could be styled the
   same way, so the shopper would not need both (example: a white tank already covers a white tube top). Only
   real matches; an empty list is fine.
-- outfits: up to 3, each a short name and closet_item_ids (ids from closet_candidates or lookalike_ids only).
-  If verdict is "good_buy": each outfit uses the new item plus 1 to 3 closet pieces that pair well with it
-  (set uses_new_item true). Otherwise: build each outfit around a piece from lookalike_ids or similar_ids
-  instead of the new item (uses_new_item false), to show the shopper they already have the look.
-  If closet_candidates is empty or nothing pairs, return an empty list.
+- outfits: 3 distinct outfits that each style the NEW item (uses_new_item true), for different occasions or
+  moods. Each outfit: a short name, closet_item_ids (ids from closet_candidates or lookalike_ids only) and
+  basics: plain staples most people already own, 2 to 5 words each, color plus piece, no brands (e.g. "white
+  crew tee", "straight blue jeans", "black ankle boots", "gray crewneck sweater"). Prefer the shopper's closet
+  pieces when they fit; fill the rest with basics. Each outfit needs at least one other piece besides the item.
+  Outfits only count as different when the occasion or mood changes (lounge, errands, school or work, going
+  out, travel, gym), not when one basic is swapped for a similar one. Most everyday pieces, including printed
+  ones, can honestly be worn 3 ways with plain basics (a solid tee, hoodie, tank or sweater; jeans; sneakers).
+  Return fewer than 3 only when the piece truly clashes with basics or fits one narrow occasion (a sequin
+  party top, a costume-like piece, a formal-only item, a hard-to-match bold color). Fewer than 3 tells the
+  shopper the piece is not versatile, so never pad with near-duplicates and never hold back real options.
 - alternatives: up to 2 general-purpose pieces that give a similar use with more wear, e.g. "plain cotton crew
   tee". name: a short generic description. search_query: 2 to 6 words to search a store. No brands, no links.
 
@@ -81,8 +92,9 @@ DETAILS_TOOL = {
             "durability": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["pilling_risk", "note", "expected_wears", "expected_months"],
+                "required": ["rating", "pilling_risk", "note", "expected_wears", "expected_months"],
                 "properties": {
+                    "rating": {"type": "string", "enum": ["good", "fair", "poor"]},
                     "pilling_risk": {"type": "string", "enum": ["low", "medium", "high"]},
                     "note": {"type": "string"},
                     "expected_wears": {"type": "integer"},
@@ -96,10 +108,11 @@ DETAILS_TOOL = {
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["name", "closet_item_ids", "uses_new_item"],
+                    "required": ["name", "closet_item_ids", "basics", "uses_new_item"],
                     "properties": {
                         "name": {"type": "string"},
                         "closet_item_ids": {"type": "array", "items": {"type": "string"}},
+                        "basics": {"type": "array", "items": {"type": "string"}},
                         "uses_new_item": {"type": "boolean"},
                     },
                 },
@@ -222,25 +235,51 @@ def ask_claude(payload: dict) -> tuple[dict | None, list[str]]:
 
 # ---------- guardrails ----------
 
-def clean_outfits(raw: list, *, verdict: str, candidate_ids: set, anchor_ids: set) -> list[dict]:
-    """Keep outfits that follow the verdict rule, with only real candidate ids.
+MAX_BASICS = 4
+BASIC_MAX_CHARS = 40
 
-    good_buy: uses the new item and at least one closet piece.
-    otherwise: does not use the new item and contains at least one anchor (lookalike or similar) piece.
-    """
+
+def clean_basics(raw) -> list[str]:
+    """Short generic staples, deduplicated, lowercase. Anything long or empty is dropped."""
     out = []
+    for b in raw or []:
+        text = " ".join(str(b).split()).lower()[:BASIC_MAX_CHARS]
+        if text and text not in out:
+            out.append(text)
+    return out[:MAX_BASICS]
+
+
+def clean_outfits(raw: list, *, candidate_ids: set) -> list[dict]:
+    """Outfits that style the new item with real closet pieces (unknown ids dropped) and/or basic staples.
+    An outfit with no other piece left is dropped. At most MAX_OUTFITS."""
+    out, seen = [], set()
     for o in raw or []:
         ids = list(dict.fromkeys(str(i) for i in o.get("closet_item_ids", []) if str(i) in candidate_ids))[:4]
+        basics = clean_basics(o.get("basics"))
         name = str(o.get("name") or "").strip()[:80]
-        if not ids or not name:
+        key = (tuple(sorted(ids)), tuple(sorted(basics)))
+        if not name or not (ids or basics) or key in seen:
             continue
-        if verdict == RECOMMENDED:
-            out.append({"name": name, "closet_item_ids": ids, "uses_new_item": True})
-        elif anchor_ids & set(ids):
-            out.append({"name": name, "closet_item_ids": ids, "uses_new_item": False})
+        seen.add(key)
+        out.append({"name": name, "closet_item_ids": ids, "basics": basics, "uses_new_item": True})
         if len(out) == MAX_OUTFITS:
             break
     return out
+
+
+NOTE_MAX_CHARS = 360
+
+
+def clip_sentences(text: str, limit: int) -> str:
+    """At most `limit` characters, cut at the end of a sentence so a note never stops mid-word."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    end = max(head.rfind(". "), head.rfind("! "), head.rfind("? "))
+    if end > 0:
+        return head[:end + 1]
+    return head[:head.rfind(" ")].rstrip(",;:") + "." if " " in head else head
 
 
 def clamp(value, low, high):
@@ -292,20 +331,20 @@ def build_details(user: dict, verdict_doc: dict) -> m.AnalysisDetails:
     reply, claude_errors = ask_claude(payload)
     errors += claude_errors
 
-    durability = {"pilling_risk": None, "note": "", "expected_wears": None, "expected_months": None}
+    durability = {"rating": None, "pilling_risk": None, "note": "", "expected_wears": None, "expected_months": None}
     trend_note, similar_ids, outfits, raw_alts = None, [], [], []
     if reply:
         d = reply.get("durability") or {}
         durability = {
+            "rating": d.get("rating") if d.get("rating") in ("good", "fair", "poor") else None,
             "pilling_risk": d.get("pilling_risk") if d.get("pilling_risk") in ("low", "medium", "high") else None,
-            "note": str(d.get("note") or "")[:240],
+            "note": clip_sentences(str(d.get("note") or ""), NOTE_MAX_CHARS),
             "expected_wears": clamp(d.get("expected_wears"), 1, 1000),
             "expected_months": clamp(d.get("expected_months"), 1, 240),
         }
         trend_note = (str(reply.get("trend_note"))[:240] if trend and reply.get("trend_note") else None)
         similar_ids = [i for i in dict.fromkeys(map(str, reply.get("similar_ids") or [])) if i in candidate_ids][:3]
-        anchors = set(similar_ids) | {str(i) for i in lookalike_ids}
-        outfits = clean_outfits(reply.get("outfits"), verdict=verdict, candidate_ids=candidate_ids, anchor_ids=anchors)
+        outfits = clean_outfits(reply.get("outfits"), candidate_ids=candidate_ids)
         raw_alts = reply.get("alternatives") or []
     if durability["expected_wears"] is None:  # code fallback: the category average (wears.json, unverified)
         durability["expected_wears"] = expected_wears_for((attrs or {}).get("category"))
@@ -327,7 +366,8 @@ def build_details(user: dict, verdict_doc: dict) -> m.AnalysisDetails:
     for o in outfits:
         o["closet_item_ids"] = [i for i in o["closet_item_ids"] if i in docs]
         o["closet_item_names"] = [docs[i]["name"] for i in o["closet_item_ids"]]
-    outfits = [o for o in outfits if o["closet_item_ids"]]
+    outfits = [o for o in outfits if o["closet_item_ids"] or o["basics"]]
+    versatile = len(outfits) >= MAX_OUTFITS if reply else None  # fewer than 3 real outfits: not versatile
 
     details = m.AnalysisDetails(
         verdict_id=str(verdict_doc["_id"]),
@@ -339,6 +379,7 @@ def build_details(user: dict, verdict_doc: dict) -> m.AnalysisDetails:
         cost=m.CostEfficiency(**cost),
         similar_closet_items=[closet_out(docs[i]) for i in similar_ids if i in docs],
         outfits=[m.Outfit(**o) for o in outfits],
+        versatile=versatile,
         alternatives=alternatives,
         closet_checked=bool(closet_size),
         decided_by="claude" if reply else "code",
@@ -349,12 +390,19 @@ def build_details(user: dict, verdict_doc: dict) -> m.AnalysisDetails:
     return details
 
 
+# Bump when the analysis changes so older cached copies are rebuilt.
+# 2: composition keeps the body fabric over pocket bags; durability note covers overall wear and tear.
+# 3: wear-and-tear rating; outfits always style the item, with closet pieces and basics; versatile flag.
+DETAILS_VERSION = 3
+
+
 def details_for(user: dict, verdict_doc: dict, refresh: bool = False) -> m.AnalysisDetails:
-    """Cached on the verdict document as `details`. refresh=True rebuilds it."""
+    """Cached on the verdict document as `details` (with `details_version`). refresh=True rebuilds it."""
     cached = verdict_doc.get("details")
-    if cached and not refresh:
+    if cached and not refresh and verdict_doc.get("details_version") == DETAILS_VERSION:
         return m.AnalysisDetails(**cached)
     details = build_details(user, verdict_doc)
     if details.decided_by == "claude":  # do not cache a fallback; a later request may get the full analysis
-        verdicts.update_one({"_id": verdict_doc["_id"]}, {"$set": {"details": details.model_dump()}})
+        verdicts.update_one({"_id": verdict_doc["_id"]},
+                            {"$set": {"details": details.model_dump(), "details_version": DETAILS_VERSION}})
     return details

@@ -358,11 +358,21 @@
       el("span", { text: `${h.note} ` }),
       el("a", { href: h.url, target: "_blank", rel: "noopener noreferrer", text: `Source: ${h.source}` }),
     ]));
-    if (fibers || dur.note || health.length) {
+    if (fibers || health.length) {
       rows.push(row("Materials", [
         fibers ? el("p", { class: "an-strong", text: `${cap(fibers)}${fromPhoto}` }) : null,
-        dur.note ? el("p", { text: `${dur.pilling_risk ? `${cap(dur.pilling_risk)} pilling risk. ` : ""}${dur.note}` }) : null,
         ...health,
+      ]));
+    }
+
+    // Wear and tear: a good / fair / poor rating and the overall estimate (pilling, fading, stretching, seams).
+    if (dur.note || dur.rating) {
+      rows.push(row("Wear and tear", [
+        dur.rating ? el("p", { class: "an-strong" }, [
+          el("span", { class: `an-rating ${dur.rating}`, text: dur.rating }),
+          el("span", { class: "tag", text: "Estimate" }),
+        ]) : null,
+        dur.note ? el("p", { text: dur.note }) : null,
       ]));
     }
 
@@ -390,15 +400,29 @@
         d.similar_closet_items.map((c) => el("li", { text: c.name })))]));
     }
 
-    // Outfits.
-    if ((d.outfits || []).length) {
+    // Outfits: the item with closet pieces (marked "yours") and everyday basics.
+    const outfits = d.outfits || [];
+    if (outfits.length) {
       const newName = item?.name ? `this ${item.name.split(" ").slice(-2).join(" ").toLowerCase()}` : "this piece";
-      rows.push(row(d.outfits[0].uses_new_item ? "Outfits with this piece" : "Outfits with what you own", [
-        el("ul", { class: "an-list" }, d.outfits.map((o) => el("li", {}, [
+      rows.push(row("Outfits with this piece", [
+        el("ul", { class: "an-list" }, outfits.map((o) => el("li", {}, [
           el("span", { class: "an-strong", text: `${o.name}: ` }),
-          el("span", { text: [...(o.uses_new_item ? [newName] : []), ...(o.closet_item_names || [])].join(" + ") }),
+          el("span", { text: [
+            ...(o.uses_new_item ? [newName] : []),
+            ...(o.closet_item_names || []).map((n) => `your ${n.toLowerCase()}`),
+            ...(o.basics || []),
+          ].join(" + ") }),
         ]))),
       ]));
+    }
+    // Fewer than 3 real outfits: the piece is hard to wear many ways.
+    if (d.versatile === false) {
+      const n = outfits.length;
+      rows.push(row("Not versatile", [el("p", {}, [
+        el("span", { class: "an-rating poor", text: "not versatile" }),
+        el("span", { text: n ? ` Only ${n} way${n === 1 ? "" : "s"} to wear it, so it may sit in your closet.`
+          : " Hard to pair with everyday basics, so it may sit in your closet." }),
+      ])]));
     }
 
     // General-purpose alternatives (only sent when cost per wear is poor).

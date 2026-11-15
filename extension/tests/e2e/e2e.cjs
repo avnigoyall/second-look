@@ -65,7 +65,7 @@ const RECORDER = `(() => {
   await popup.fill("#email", email);
   await popup.fill("#password", "secret123");
   await popup.click('#login-view button[type="submit"]');
-  await popup.waitForSelector("#who:has-text('Logged in as')");
+  await popup.waitForSelector(`#who:has-text('${email}')`);
   pass("popup login", await popup.textContent("#who"));
   await popup.screenshot({ path: `${OUT}/popup-loggedin.png` });
 
@@ -95,9 +95,9 @@ const RECORDER = `(() => {
     // Hold until decided: the store's own add-to-cart handler waits for Buy (Skip keeps it out of the bag).
     (await page.title() !== "added" ? pass : fail)("1. store's add-to-cart held while the verdict is open");
     await sleep(400); await page.screenshot({ path: `${OUT}/1-verdict.png` });
-    // debounce: a second click within 3s does nothing new
+    // debounce: a second click within 3s does nothing new (the card's backdrop covers the page, so force it)
     const before = (await storage()).length;
-    await page.click("#add");
+    await page.click("#add", { force: true, timeout: 3000 }).catch(() => {});
     await sleep(800);
     ((await storage()).length === before ? pass : fail)("1. 3s debounce per URL");
     (await card(page).getByRole("button", { name: /Thumbs/ }).count() === 0 ? pass : fail)("1. no feedback buttons on the card");

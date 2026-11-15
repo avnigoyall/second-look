@@ -35,8 +35,9 @@ _LOOKUP = dict(_ALIASES)
 _PCT_FIRST = re.compile(rf"(\d{{1,3}}(?:[.,]\d+)?)\s*%\s*({_ALIAS_RE})\b", re.I)
 _PCT_LAST = re.compile(rf"\b({_ALIAS_RE})\s*[:\-]?\s*(\d{{1,3}}(?:[.,]\d+)?)\s*%", re.I)
 # Sections that are not the main fabric. The main fabric is the text before the first of these labels.
-_SECONDARY = re.compile(r"\b(lining|linings|lined with|pocket(?:ing)?s?|trim|rib(?:bing)?|contrast|filling|fill|"
-                        r"padding|insole|outsole|sole|embroidery|applique)\s*[:\-]", re.I)
+_SECONDARY = re.compile(r"\b(lining|linings|lined with|pocket(?:ing)?s?(?: (?:bags?|linings?))?|trim|rib(?:bing)?|"
+                        r"contrast|filling|fill|padding|insole|outsole|sole|embroidery|applique|hood lining|"
+                        r"waistband|cuffs?)\s*[:\-]", re.I)
 _PRIMARY_LABEL = re.compile(r"\b(shell|body|main(?: fabric)?|outer(?: shell)?|fabric|upper|self)\s*[:\-]", re.I)
 
 
@@ -65,19 +66,19 @@ def parse_composition(text: str | None) -> list[dict]:
         return []
     text = re.sub(r"\s+", " ", text)
     pairs = _pairs(_main_section(text)) or _pairs(text)
+    # Keep the first complete fabric in reading order: once the pairs reach 100%, later ones belong to another
+    # part or variant ("60% cotton, 40% polyester / pocket bag: 100% cotton" keeps 60/40, not 100% cotton).
     totals: dict[str, float] = {}
+    running = 0.0
     for fiber, pct in pairs:
-        if 0 < pct <= 100:
-            totals[fiber] = totals.get(fiber, 0) + pct
-    # A page that lists two variants ("100% cotton ... 100% polyester") sums past 100: keep the first 100%.
-    result, running = [], 0.0
-    for fiber, pct in totals.items():
+        if not 0 < pct <= 100:
+            continue
         if running >= 100:
             break
         pct = min(pct, 100 - running)
         running += pct
-        result.append({"fiber": fiber, "pct": round(pct, 1)})
-    return sorted(result, key=lambda f: -f["pct"])
+        totals[fiber] = totals.get(fiber, 0) + pct
+    return sorted(({"fiber": f, "pct": round(p, 1)} for f, p in totals.items()), key=lambda f: -f["pct"])
 
 
 def fibers_from_fabric(fabric: str | None) -> list[dict]:

@@ -173,7 +173,7 @@ def details_message(d) -> str:
         lines.append(f"Materials: {fibers}." + (" (from the photo)" if d.materials_source == "attributes" else ""))
     dur = d.durability
     if dur.note:
-        lines.append((f"{dur.pilling_risk.capitalize()} pilling risk. " if dur.pilling_risk else "") + dur.note)
+        lines.append(f"Wear and tear{f' ({dur.rating})' if dur.rating else ''}: {dur.note}")
     for h in d.health_notes:  # always with the source (CONTRACT: no claim without a source)
         lines.append(f"{h.note} Source: {h.url}")
     life = [f"about {dur.expected_wears} wears" if dur.expected_wears else "",
@@ -187,10 +187,14 @@ def details_message(d) -> str:
     if d.similar_closet_items:
         lines.append("Similar in your closet: " + ", ".join(c.name for c in d.similar_closet_items) + ".")
     if d.outfits:
-        lines.append("Outfit ideas:" if d.outfits[0].uses_new_item else "Wear what you own instead:")
+        lines.append("Outfit ideas:")
         for o in d.outfits:
-            pieces = (["this piece"] if o.uses_new_item else []) + o.closet_item_names
+            pieces = (["this piece"] if o.uses_new_item else []) + o.closet_item_names + o.basics
             lines.append(f"- {o.name}: {' + '.join(pieces)}")
+    if d.versatile is False:
+        n = len(d.outfits)
+        lines.append(f"Not versatile: only {n} way{'s' if n != 1 else ''} to wear it." if n
+                     else "Not versatile: hard to pair with everyday basics.")
     for a in d.alternatives:
         lines.append(f"Wears more for the money: {a.name} {a.url}")
     return "\n".join(lines)

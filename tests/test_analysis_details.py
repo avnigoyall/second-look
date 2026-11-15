@@ -60,14 +60,15 @@ def verdict_doc(verdict="good_buy", price=30.0, materials="Shell: 95% Polyester,
 
 def reply(**over):
     base = {
-        "durability": {"pilling_risk": "high", "note": "Polyester knit will pill.", "expected_wears": 15,
+        "durability": {"rating": "poor", "pilling_risk": "high", "note": "Polyester knit will pill.", "expected_wears": 15,
                        "expected_months": 6},
         "trend_note": None,
         "similar_ids": [str(TANK)],
         "outfits": [
-            {"name": "Easy weekend", "closet_item_ids": [str(JEANS)], "uses_new_item": True},
-            {"name": "Going out", "closet_item_ids": [str(SKIRT), "not-a-real-id"], "uses_new_item": True},
-            {"name": "Layered", "closet_item_ids": [str(COAT), str(JEANS)], "uses_new_item": True},
+            {"name": "Easy weekend", "closet_item_ids": [str(JEANS)], "basics": [], "uses_new_item": True},
+            {"name": "Going out", "closet_item_ids": [str(SKIRT), "not-a-real-id"], "basics": ["black ankle boots"],
+             "uses_new_item": True},
+            {"name": "Layered", "closet_item_ids": [str(COAT), str(JEANS)], "basics": [], "uses_new_item": True},
         ],
         "alternatives": [{"name": "Plain cotton tank", "search_query": "white cotton tank top"}],
     }
@@ -150,19 +151,38 @@ class DetailsTest(unittest.TestCase):
         self.assertEqual(out.outfits[1].closet_item_names, ["Denim mini skirt"])
         self.assertEqual([c.name for c in out.similar_closet_items], ["White tank top"])
 
-    def test_not_recommended_outfits_are_built_around_the_lookalike(self):
+    def test_three_outfits_is_versatile_and_rating_is_kept(self):
+        out, _ = self.run_details(verdict_doc("good_buy"))
+        self.assertTrue(out.versatile)
+        self.assertEqual(out.durability.rating, "poor")
+        self.assertEqual(out.outfits[1].basics, ["black ankle boots"])
+
+    def test_outfits_style_the_item_with_basics_for_every_verdict(self):
         claude = reply(outfits=[
-            {"name": "Tank instead", "closet_item_ids": [str(TANK), str(JEANS)], "uses_new_item": False},
-            {"name": "No anchor", "closet_item_ids": [str(JEANS)], "uses_new_item": False},
+            {"name": "Errands", "closet_item_ids": [], "basics": ["White Crew Tee", "white crew tee", "  "],
+             "uses_new_item": False},
+            {"name": "Nothing else", "closet_item_ids": ["fake"], "basics": [], "uses_new_item": True},
         ])
         out, _ = self.run_details(verdict_doc("have_this_look", lookalikes=[TANK]), claude=claude)
-        self.assertEqual([o.name for o in out.outfits], ["Tank instead"])  # must contain the lookalike
-        self.assertFalse(out.outfits[0].uses_new_item)
+        self.assertEqual([(o.name, o.basics, o.uses_new_item) for o in out.outfits],
+                         [("Errands", ["white crew tee"], True)])  # deduped; an outfit with no other piece is dropped
+        self.assertFalse(out.versatile)  # only 1 outfit: not versatile
 
-    def test_empty_closet_skips_closet_parts(self):
-        out, calls = self.run_details(verdict_doc(), closet_size=0)
+    def test_duplicate_outfits_do_not_count_toward_versatile(self):
+        same = {"closet_item_ids": [], "basics": ["blue jeans"], "uses_new_item": True}
+        claude = reply(outfits=[{"name": "A", **same}, {"name": "B", **same}, {"name": "C", **same}])
+        out, _ = self.run_details(verdict_doc(), claude=claude)
+        self.assertEqual(len(out.outfits), 1)
+        self.assertFalse(out.versatile)
+
+    def test_empty_closet_still_gets_outfits_from_basics(self):
+        claude = reply(outfits=[
+            {"name": n, "closet_item_ids": [str(JEANS)], "basics": [b], "uses_new_item": True}
+            for n, b in (("Casual", "blue jeans"), ("Dressy", "black slip skirt"), ("Cozy", "gray cardigan"))])
+        out, calls = self.run_details(verdict_doc(), closet_size=0, claude=claude)
         self.assertFalse(out.closet_checked)
-        self.assertEqual(out.outfits, [])
+        self.assertEqual([o.closet_item_ids for o in out.outfits], [[], [], []])  # no closet ids without a closet
+        self.assertTrue(out.versatile)
         self.assertEqual(out.similar_closet_items, [])
         self.assertEqual(calls["claude"][0]["closet_candidates"], [])
 
@@ -192,12 +212,25 @@ class CompositionTest(unittest.TestCase):
             "Main: 70% wool 30% polyamide; Rib: 98% cotton 2% elastane": [("wool", 70.0), ("nylon", 30.0)],
             "Body: 100% cotton. Pocketing: 65% polyester 35% cotton": [("cotton", 100.0)],
             "50,5% cotton 49,5% recycled polyester": [("cotton", 50.5), ("polyester", 49.5)],
+            # Hollister: the pocket bag is its own section, so the body blend is kept whole.
+            "BODY: 60% COTTON, 40% POLYESTER / POCKET BAG: 100% COTTON ONLY NON-CHLORINE BLEACH":
+                [("cotton", 60.0), ("polyester", 40.0)],
+            "BODY AND POCKET BAG: 60% COTTON, 40% RECYCLED POLYESTER": [("cotton", 60.0), ("polyester", 40.0)],
+            # No section labels: the first complete fabric wins, a later part does not merge into it.
+            "60% cotton, 40% polyester. 100% cotton": [("cotton", 60.0), ("polyester", 40.0)],
             "Super soft. 100% comfort guaranteed.": [],
             "": [],
         }
         for text, want in cases.items():
             with self.subTest(text=text):
                 self.assertEqual([(f["fiber"], f["pct"]) for f in parse_composition(text)], want)
+
+    def test_note_is_cut_at_a_sentence(self):
+        from backend.services.analysis_details import clip_sentences
+        text = "It will pill at the seat. The print can fade after hot washes. The baggy leg may stretch out at the knees."
+        self.assertEqual(clip_sentences(text, 70), "It will pill at the seat. The print can fade after hot washes.")
+        self.assertEqual(clip_sentences("short note", 70), "short note")
+        self.assertEqual(clip_sentences("one long sentence without any stop at all", 20), "one long sentence.")
 
     def test_fabric_fallback(self):
         self.assertEqual(fibers_from_fabric("denim"), [{"fiber": "cotton", "pct": None}])

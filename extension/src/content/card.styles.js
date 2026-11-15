@@ -217,6 +217,7 @@
     .an-rating.good { color: var(--good); background: color-mix(in oklch, var(--good), transparent 88%); }
     .an-rating.fair { color: var(--trend); background: color-mix(in oklch, var(--trend), transparent 88%); }
     .an-rating.poor { color: var(--danger); background: color-mix(in oklch, var(--danger), transparent 88%); }
+    .an-rating + .tag { margin-left: 6px; }
 
     /* small-closet ownership question: quiet, sits above the buttons */
     .own { margin-bottom: 12px; padding-top: 12px; border-top: 1px solid var(--line); }

@@ -68,6 +68,7 @@ class Outfit(BaseModel):
     closet_item_ids: list[str] = []
     uses_new_item: bool = Field(False, description="True when the outfit includes the item being checked")
     closet_item_names: list[str] = Field([], description="Names for closet_item_ids, same order (Full analysis)")
+    basics: list[str] = Field([], description="Generic staples most people own (\"white crew tee\"), no brands")
 
 
 class User(BaseModel):
@@ -561,6 +562,7 @@ class HealthNote(BaseModel):
 
 class Durability(BaseModel):
     pilling_risk: Literal["low", "medium", "high"] | None = None
+    rating: Literal["good", "fair", "poor"] | None = Field(None, description="Overall wear and tear. Estimate")
     note: str = ""
     expected_wears: int | None = Field(None, description="Estimate")
     expected_months: int | None = Field(None, description="Estimate")
@@ -581,7 +583,9 @@ class AnalysisDetails(BaseModel):
     trend_note: str | None = None
     cost: CostEfficiency = CostEfficiency()
     similar_closet_items: list[ClosetItem] = Field([], description="Closet pieces with the same feel, with image_data")
-    outfits: list[Outfit] = []
+    outfits: list[Outfit] = Field([], description="Up to 3, each styles the checked item with closet pieces and basics")
+    versatile: bool | None = Field(None, description="False when fewer than 3 outfits work with this piece. "
+                                                     "None when the model did not answer")
     alternatives: list[Alternative] = Field([], description="General-purpose picks, only when cost efficiency is poor")
     closet_checked: bool = Field(False, description="False when the closet is empty, so closet parts were skipped")
     decided_by: Literal["claude", "code"] = "code"

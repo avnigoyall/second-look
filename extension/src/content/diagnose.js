@@ -20,6 +20,10 @@
       item,
       tiers: details.tiers,
       add_to_cart_candidates: global.SecondLookMatchers.candidates(global.SecondLookMatchers.isAddToCart),
+      // Why a click on each add button would be checked or passed through to the store.
+      add_to_cart_readiness: Array.from(document.querySelectorAll('button, a, [role="button"], input[type="submit"], input[type="button"]'))
+        .filter(global.SecondLookMatchers.isAddToCart).slice(0, 5)
+        .map((el) => ({ control: global.SecondLookMatchers.describe(el), ...global.SecondLookMatchers.readiness(el) })),
       remove_candidates: global.SecondLookMatchers.candidates(global.SecondLookMatchers.isRemove),
     };
     console.log("[SecondLook] diagnose", report);
