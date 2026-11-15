@@ -11,12 +11,14 @@
     --bg: #f8f6fb; --card: #fff; --ink: #1e1a24; --muted: #6a6275;
     --line: #e6e0ee; --accent: #4b2a7b; --input: #82768f; --warm: #a8620a;
     --graph-bg: #faf9fc; --observed: #898094; --inferred: #bcb4c8;
+    --band: rgba(75, 42, 123, .09); --chip: #f1ecf7; --editorial-bg: #fbf3e8; --bar: rgba(137, 128, 148, .38);
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #15121b; --card: #1e1a26; --ink: #f2eef7; --muted: #b1a8bd;
       --line: #362f40; --accent: #c4a9ff; --input: #978ba4; --warm: #e6a454;
       --graph-bg: #1b1722; --observed: #a69bb5; --inferred: #5c526a;
+      --band: rgba(196, 169, 255, .12); --chip: #2a2434; --editorial-bg: #2d2418; --bar: rgba(166, 155, 181, .34);
     }
   }
   * { box-sizing: border-box; }
@@ -61,6 +63,38 @@
   svg .peak-label { fill: var(--warm); font-weight: 600; }
   .message { padding: 36px 0; color: var(--muted); font-size: 14px; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  .radar-grid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; margin-top: 20px; align-items: start; }
+  .radar-chart-wrap { position: relative; }
+  svg .band { fill: var(--band); }
+  svg .raw-bar { fill: var(--bar); }
+  svg .saturated-tick { stroke: var(--warm); stroke-width: 2; stroke-linecap: round; }
+  svg .crosshair { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+  svg .band-label { fill: var(--accent); font-weight: 600; }
+  .radar-tip { position: absolute; max-width: 240px; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); font-size: 12px; line-height: 1.45; pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, .08); }
+  .radar-key { display: flex; gap: 6px 18px; flex-wrap: wrap; list-style: none; padding: 0; margin: 12px 0 0; font-size: 12px; color: var(--muted); }
+  .radar-key li { display: inline-flex; align-items: center; gap: 6px; }
+  .radar-key i { display: inline-block; flex: 0 0 auto; }
+  .key-line { width: 18px; border-top: 2.5px solid var(--accent); border-radius: 2px; }
+  .key-bar { width: 8px; height: 10px; background: var(--bar); border-radius: 1px; }
+  .key-band { width: 16px; height: 10px; background: var(--band); border: 1px solid var(--line); border-radius: 2px; }
+  .key-sat { width: 2px; height: 10px; background: var(--warm); border-radius: 1px; }
+  .labels { border: 1px solid var(--line); border-radius: 10px; padding: 16px; font-size: 13px; }
+  .labels h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: -.01em; }
+  .labels dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; margin: 0; align-items: baseline; }
+  .labels dt { color: var(--muted); font-size: 12px; }
+  .labels dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--chip); color: var(--ink); font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .chip.final { background: var(--accent); color: var(--card); }
+  .editorial { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: var(--editorial-bg); color: var(--ink); font-size: 12px; }
+  .editorial strong { display: block; margin-bottom: 2px; color: var(--warm); font-weight: 600; }
+  .sample-line { margin-top: 14px; color: var(--muted); font-size: 12px; }
+  .labels ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink); font-size: 12px; }
+  .labels li + li { margin-top: 6px; }
+  .reasons-head { margin-top: 16px !important; }
+  .muted-line { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  @media (max-width: 860px) {
+    .radar-grid { grid-template-columns: minmax(0, 1fr); }
+  }
   @media (max-width: 600px) {
     main { padding: 28px 16px 40px; }
     .panel { padding: 18px; }
@@ -75,6 +109,9 @@
     .swatch { border: 1px solid CanvasText; }
     svg .curve, svg .partial-curve, svg .partial-point, svg .peak-rule, svg .peak-dot { stroke: CanvasText; }
     svg .point { fill: CanvasText; }
+    svg .band { fill: none; stroke: CanvasText; stroke-dasharray: 2 3; }
+    svg .saturated-tick { stroke: CanvasText; }
+    .chip.final { border: 1px solid CanvasText; }
   }
 </style>
 </head>
@@ -109,6 +146,45 @@
       <div class="chart-wrap"><svg id="curve" viewBox="0 0 900 300" role="img" aria-labelledby="curve-title curve-description"></svg></div>
       <figcaption class="chart-caption" id="curve-caption"></figcaption>
     </figure>
+  </section>
+  <section class="panel" aria-labelledby="radar-heading" aria-busy="true" id="radar-panel">
+    <div class="panel-head">
+      <div><h2 id="radar-heading">Radar label and timeline</h2><p class="subline">Smoothed weekly share, the measured sample run and the latest Radar decision.</p></div>
+      <label for="radar-term">Style<select id="radar-term" disabled><option>Loading styles...</option></select></label>
+    </div>
+    <p class="message" role="status" id="radar-message">Loading Radar labels...</p>
+    <div id="radar-figure" hidden>
+      <div class="radar-grid">
+        <figure style="margin:0">
+          <div class="radar-chart-wrap">
+            <svg id="radar-chart" viewBox="0 0 640 280" role="img" aria-labelledby="radar-title radar-description"></svg>
+            <div class="radar-tip" id="radar-tip" hidden></div>
+          </div>
+          <ul class="radar-key" aria-hidden="true">
+            <li><i class="key-line"></i>Smoothed share (3-week)</li>
+            <li><i class="key-bar"></i>Weekly share</li>
+            <li id="radar-key-band"><i class="key-band"></i>Sample active run</li>
+            <li><i class="key-sat"></i>Saturated week (lower bound)</li>
+          </ul>
+          <figcaption class="chart-caption" id="radar-caption"></figcaption>
+        </figure>
+        <aside class="labels" aria-labelledby="radar-labels-heading">
+          <h3 id="radar-labels-heading">Labels</h3>
+          <dl>
+            <dt>Final label</dt><dd><span class="chip final" id="radar-final"></span></dd>
+            <dt>Decided by</dt><dd id="radar-source"></dd>
+            <dt>Rule label</dt><dd><span class="chip" id="radar-rule"></span></dd>
+            <dt>Agent label</dt><dd id="radar-agent"></dd>
+            <dt>Confidence</dt><dd id="radar-confidence"></dd>
+          </dl>
+          <p class="editorial" id="radar-editorial" hidden><strong>Editorial label (team judgment, not Radar data)</strong><span id="radar-editorial-text"></span></p>
+          <p class="sample-line" id="radar-sample" hidden></p>
+          <h3 class="reasons-head" id="radar-reasons-heading">Reasons</h3>
+          <ul id="radar-reasons" aria-labelledby="radar-reasons-heading"></ul>
+          <p class="muted-line" id="radar-meta"></p>
+        </aside>
+      </div>
+    </div>
   </section>
 </main>
 <script>
@@ -317,6 +393,143 @@
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawGraph);
   api("/social-graph").then(loadGraph).catch(() => fail("graph", "The community graph is unavailable. Please try again later."));
   api("/social-trends").then(loadTrends).catch(() => { $("term").replaceChildren(); const option = document.createElement("option"); option.textContent = "Terms unavailable"; $("term").append(option); fail("curve", "Weekly trends are unavailable. Please try again later."); });
+  // ---------- Radar label and timeline (GET /social/trends/{style}/timeline) ----------
+  const LABEL_NAMES = {micro_trend: "Micro trend", established: "Established", still_active: "Still active", unknown: "Unknown"};
+  const SOURCE_NAMES = {agent: "Radar agent", rule: "Rule baseline", manual: "Editorial"};
+  const labelName = value => LABEL_NAMES[value] || "Unknown";
+  const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+  const reasonText = value => String(value || "").replace(/\[?\bev:[^\s\]]+\]?/g, "").replace(/\u2014/g, "-").replace(/\s+/g, " ").trim().slice(0, 500);
+  let radarRows = [], radarGeom = null, radarRequest = 0;
+  function drawRadarChart(data) {
+    const svg = $("radar-chart"); svg.replaceChildren();
+    const rows = (Array.isArray(data.series) ? data.series : []).filter(row => /^\d{4}-\d{2}-\d{2}$/.test(row.week || ""));
+    radarRows = rows;
+    const chartWidth = Math.max(280, Math.min(900, svg.getBoundingClientRect().width || 640)), chartHeight = 280;
+    svg.setAttribute("viewBox", "0 0 " + chartWidth + " " + chartHeight);
+    const safe = clean(data.style);
+    svg.append(text("title", "Weekly Bluesky sample share for " + safe, {id: "radar-title"}),
+      text("desc", rows.length + " weeks. The line is the 3-week smoothed share over full weeks; bars are the weekly share. " + (data.sample_run ? "The shaded band is the measured sample active run from " + shortDate(data.sample_run.start_week) + " to " + shortDate(data.sample_run.end_week) + "." : "No measured sample active run."), {id: "radar-description"}));
+    if (!rows.length) { svg.append(text("text", "No weekly observations", {x: chartWidth / 2, y: chartHeight / 2, "text-anchor": "middle"})); radarGeom = null; return; }
+    const left = 48, right = chartWidth - 12, top = 30, bottom = chartHeight - 40;
+    const values = rows.flatMap(row => [Number(row.share) || 0, Number(row.smoothed_share) || 0]);
+    const ymax = Math.max(.001, ...values) * 1.15;
+    const step = (right - left) / rows.length;
+    const x = index => left + step * (index + .5);
+    const y = value => bottom - (bottom - top) * value / ymax;
+    const indexOf = week => rows.findIndex(row => row.week === week);
+    if (data.sample_run) {
+      const a = indexOf(data.sample_run.start_week), b = indexOf(data.sample_run.end_week);
+      if (a >= 0 && b >= a) {
+        svg.append(text("rect", null, {x: x(a) - step / 2, y: top, width: step * (b - a + 1), height: bottom - top, class: "band", rx: 2}));
+        const mid = (x(a) + x(b)) / 2;
+        svg.append(text("text", "Sample run · " + plural(data.sample_run.weeks_active, "week"), {x: Math.max(left + 4, Math.min(right - 4, mid)), y: top - 10, "text-anchor": mid > right - 90 ? "end" : mid < left + 90 ? "start" : "middle", class: "band-label"}));
+      }
+    }
+    for (let i = 0; i <= 4; i++) {
+      const value = ymax * i / 4, yp = y(value);
+      svg.append(text("line", null, {x1: left, x2: right, y1: yp, y2: yp, class: "grid"}));
+      svg.append(text("text", (value * 100).toFixed(ymax < .1 ? 1 : 0) + "%", {x: left - 10, y: yp + 4, "text-anchor": "end"}));
+    }
+    const barWidth = Math.max(1, step - 2);
+    rows.forEach((row, index) => {
+      const share = Math.max(0, Number(row.share) || 0);
+      if (share > 0) svg.append(text("rect", null, {x: x(index) - barWidth / 2, y: y(share), width: barWidth, height: Math.max(.5, bottom - y(share)), class: "raw-bar"}));
+      if (row.saturated) svg.append(text("line", null, {x1: x(index), x2: x(index), y1: bottom + 4, y2: bottom + 10, class: "saturated-tick"}));
+    });
+    let path = "", open = false;
+    rows.forEach((row, index) => {
+      const value = row.smoothed_share;
+      if (!Number.isFinite(value)) { open = false; return; }
+      path += (open ? "L" : "M") + x(index).toFixed(2) + "," + y(value).toFixed(2) + " "; open = true;
+    });
+    svg.append(text("path", null, {d: path, class: "curve"}));
+    const ticks = new Set([0, Math.floor((rows.length - 1) / 3), Math.floor(2 * (rows.length - 1) / 3), rows.length - 1]);
+    for (const index of ticks) svg.append(text("text", shortDate(rows[index].week), {x: x(index), y: bottom + 28, "text-anchor": index === 0 ? "start" : index === rows.length - 1 ? "end" : "middle"}));
+    const peak = (data.markers || []).find(marker => marker.kind === "peak");
+    const peakIndex = peak ? indexOf(peak.week) : -1;
+    if (peakIndex >= 0 && Number.isFinite(rows[peakIndex].smoothed_share)) {
+      const xp = x(peakIndex), yp = y(rows[peakIndex].smoothed_share);
+      svg.append(text("circle", null, {cx: xp, cy: yp, r: 5, class: "peak-dot"}));
+      if (!data.sample_run) svg.append(text("text", "Sample peak" + (peak.censored ? " (at cap)" : ""), {x: Math.max(left + 4, Math.min(right - 4, xp)), y: top - 10, "text-anchor": xp > right - 90 ? "end" : xp < left + 90 ? "start" : "middle", class: "peak-label"}));
+    }
+    const cross = text("line", null, {x1: 0, x2: 0, y1: top, y2: bottom, class: "crosshair", visibility: "hidden"});
+    svg.append(cross);
+    radarGeom = {left, right, step, cross, chartWidth};
+  }
+  function showRadarTip(event) {
+    if (!radarGeom || !radarRows.length) return;
+    const svg = $("radar-chart"), rect = svg.getBoundingClientRect(), scale = radarGeom.chartWidth / rect.width;
+    const px = (event.clientX - rect.left) * scale;
+    const index = Math.floor((px - radarGeom.left) / radarGeom.step);
+    const tip = $("radar-tip");
+    if (index < 0 || index >= radarRows.length) { tip.hidden = true; radarGeom.cross.setAttribute("visibility", "hidden"); return; }
+    const row = radarRows[index], cx = radarGeom.left + radarGeom.step * (index + .5);
+    radarGeom.cross.setAttribute("x1", cx); radarGeom.cross.setAttribute("x2", cx); radarGeom.cross.setAttribute("visibility", "visible");
+    const lines = ["Week of " + shortDate(row.week), (Number(row.count) || 0).toLocaleString() + " of " + (Number(row.corpus_count) || 0).toLocaleString() + " sampled posts (" + ((Number(row.share) || 0) * 100).toFixed(2) + "%)"];
+    if (Number.isFinite(row.smoothed_share)) lines.push("Smoothed: " + (row.smoothed_share * 100).toFixed(2) + "%");
+    if (row.partial_edge) lines.push("Partial edge week, not in the rule window");
+    if (row.saturated) lines.push("Saturated: count is a lower bound");
+    tip.replaceChildren(...lines.map((line, i) => { const el = document.createElement(i ? "div" : "strong"); el.textContent = line; if (!i) el.style.display = "block"; return el; }));
+    tip.hidden = false;
+    const tipX = cx / scale, wrapWidth = rect.width;
+    tip.style.left = Math.max(4, Math.min(wrapWidth - tip.offsetWidth - 4, tipX + 12 + tip.offsetWidth > wrapWidth ? tipX - tip.offsetWidth - 12 : tipX + 12)) + "px";
+    tip.style.top = "8px";
+  }
+  function renderRadarLabels(data) {
+    $("radar-final").textContent = labelName(data.final_label);
+    $("radar-source").textContent = SOURCE_NAMES[data.decision_source] || "Rule baseline";
+    $("radar-rule").textContent = labelName(data.rule_label);
+    const agent = $("radar-agent"); agent.replaceChildren();
+    if (data.agent_label) { const chip = document.createElement("span"); chip.className = "chip"; chip.textContent = labelName(data.agent_label); agent.append(chip); }
+    else agent.textContent = data.decision_source === "manual" ? "Not used" : "No decision yet";
+    $("radar-confidence").textContent = data.confidence ? data.confidence[0].toUpperCase() + data.confidence.slice(1) : "Unknown";
+    const editorial = data.decision_source === "manual" && data.editorial;
+    $("radar-editorial").hidden = !editorial;
+    $("radar-editorial-text").textContent = editorial ? "Source: " + reasonText(data.editorial.source_text) : "";
+    const sample = data.sample_lifespan;
+    $("radar-sample").hidden = !sample;
+    $("radar-sample").textContent = sample ? "In a Bluesky sample, posts " + (Number.isInteger(sample.weeks_to_rise) ? "rose in " + plural(sample.weeks_to_rise, "week") + " and " : "") + "stayed active " + plural(sample.weeks_active, "week") + ". This describes the sample, not the whole market." : "";
+    const list = $("radar-reasons"); list.replaceChildren();
+    const reasons = editorial ? [] : (data.reasons || []).map(reasonText).filter(Boolean);
+    $("radar-reasons-heading").hidden = !reasons.length && !!editorial;
+    if (reasons.length) for (const reason of reasons) { const item = document.createElement("li"); item.textContent = reason; list.append(item); }
+    else if (!editorial) { const item = document.createElement("li"); item.textContent = data.decision_source === "rule" ? "No agent decision yet." + ((data.rule_reasons || []).length ? " Rule: " + data.rule_reasons.map(reasonText).join("; ") + "." : "") : "No reasons recorded."; list.append(item); }
+    const meta = [];
+    if (data.evidence_count) meta.push(plural(data.evidence_count, "evidence item") + " cited");
+    if (data.decided_at && !Number.isNaN(new Date(data.decided_at).valueOf())) meta.push("decided " + new Intl.DateTimeFormat(undefined, {month: "short", day: "numeric"}).format(new Date(data.decided_at)));
+    if (data.decision_source === "agent" && data.agree !== null && data.agree !== undefined) meta.push(data.agree ? "agrees with the rule" : "differs from the rule");
+    $("radar-meta").textContent = meta.length ? meta.join(" · ") : "";
+    const run = data.sample_run;
+    $("radar-key-band").hidden = !run;
+    $("radar-caption").textContent = "Estimate for " + clean(data.style) + ". " + (data.decision_source === "manual" ? "This style has an editorial label, so no sample run or lifespan is shown. " : run ? "The band is the measured active run in the Bluesky sample (" + plural(run.weeks_active, "week") + "), not a market-wide lifespan. " : "No fully observed active run could be measured in the sample window. ") + "Counts are sampled search estimates, not platform totals.";
+  }
+  async function loadRadar() {
+    const term = $("radar-term").value, request = ++radarRequest;
+    if (!term) return;
+    $("radar-panel").setAttribute("aria-busy", "true");
+    try {
+      const data = await api("/social/trends/" + encodeURIComponent(term) + "/timeline");
+      if (request !== radarRequest) return;
+      $("radar-message").hidden = true; $("radar-figure").hidden = false; $("radar-panel").setAttribute("aria-busy", "false");
+      renderRadarLabels(data); drawRadarChart(data); $("radar-panel").__data = data;
+    } catch (error) {
+      if (request === radarRequest) fail("radar", "The Radar timeline for this style is unavailable. Please try again later.");
+    }
+  }
+  function loadRadarTerms(data) {
+    const terms = (Array.isArray(data.trends) ? data.trends : []).map(row => row && row.term).filter(term => typeof term === "string").sort((a, b) => a.localeCompare(b));
+    const select = $("radar-term"); select.replaceChildren();
+    if (!terms.length) { const option = document.createElement("option"); option.textContent = "No styles available"; select.append(option); fail("radar", "No Radar styles have been computed yet."); return; }
+    for (const term of terms) { const option = document.createElement("option"); option.value = term; option.textContent = clean(term); select.append(option); }
+    const requested = new URLSearchParams(location.search).get("term");
+    if (terms.includes(requested)) select.value = requested;
+    select.disabled = false; loadRadar();
+  }
+  $("radar-term").addEventListener("change", loadRadar);
+  $("radar-chart").addEventListener("pointermove", showRadarTip);
+  $("radar-chart").addEventListener("pointerleave", () => { $("radar-tip").hidden = true; if (radarGeom) radarGeom.cross.setAttribute("visibility", "hidden"); });
+  window.addEventListener("resize", () => { if ($("radar-panel").__data && !$("radar-figure").hidden) drawRadarChart($("radar-panel").__data); });
+  api("/social-trends").then(loadRadarTerms).catch(() => { $("radar-term").replaceChildren(); const option = document.createElement("option"); option.textContent = "Styles unavailable"; $("radar-term").append(option); fail("radar", "Radar labels are unavailable. Please try again later."); });
 })();
 </script>
 </body>
