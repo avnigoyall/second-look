@@ -45,7 +45,25 @@ def _steps() -> list[tuple[str, callable]]:
                 price_reader.claude_client(), claude_model, price_reader.PRICE_TOOL,
                 "Warm-up call. Report price_text null and the reason 'ok'.")),
         ]
+    if os.getenv("SOCIAL_RADAR_ENABLED", "0").lower() in ("1", "true", "yes"):
+        steps.append(("social_demo_products", _warm_demo_products))
     return steps
+
+
+def _warm_demo_products() -> int:
+    """Fill this server's Social Radar caches for config/demo_products.json (scripts/prewarm_social.py warm())."""
+    import importlib.util
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = root / "scripts" / "prewarm_social.py"
+    spec = importlib.util.spec_from_file_location("prewarm_social", script)
+    prewarm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prewarm)
+    products = prewarm.load_products(root / "config" / "demo_products.json") or []
+    matched = prewarm.warm(products)
+    time.sleep(3)  # cold lookups finish in the background and fill the caches; warm again to confirm
+    return prewarm.warm(products) or matched
 
 
 def _run() -> None:
