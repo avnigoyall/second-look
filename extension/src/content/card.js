@@ -258,8 +258,9 @@
         sending = Promise.reject(err);
       }
       hide();
+      let res = null;
       try {
-        const res = await sending;
+        res = await sending;
         // Rare: the store re-rendered its button while the card was open, so the replay had nothing to click.
         if (action === "bought" && res?.bag === "missing") showNotice("Press the store's add button again to add it.");
       } catch (err) {

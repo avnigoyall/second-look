@@ -237,49 +237,51 @@ async function shot(page, name) {
     errors.push(...s.page.errors); await s.ctx.close();
   }
 
-  // Savings goal (CONTRACT section 15): one extra line under the skip message when /action sends goal.
+  // After Skip the card closes (Avni's flow), so the savings result shows in the notice: the skip message,
+  // plus the savings goal (CONTRACT section 15) as a second, smaller line when /action sends goal.
   const done = { status: "done", amount_cents: 2577 };
-  const GOAL_CASES = [
-    { tag: "none", transfer: done, goal: undefined, line: null },
-    { tag: "progress", transfer: done, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 34000, reached: false }, line: "$340 of $2,000 for Japan trip" },
-    { tag: "cents", transfer: done, goal: { name: "Japan trip", target_cents: 1250050, saved_cents: 34099, reached: false }, line: "$340.99 of $12,500.50 for Japan trip" },
-    { tag: "pending", transfer: { status: "pending", amount_cents: 2577 }, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 34000, reached: false }, line: "$340 of $2,000 for Japan trip" },
-    { tag: "reached", transfer: done, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 201577, reached: true }, line: "Japan trip: you made it" },
-    { tag: "html-name", transfer: done, goal: { name: "<b>New bike</b>", target_cents: 50000, saved_cents: 12345, reached: false }, line: "$123.45 of $500 for <b>New bike</b>" },
+  const goal = { name: "Japan trip", target_cents: 200000, saved_cents: 34000, reached: false };
+  const NOTICE_CASES = [
+    { tag: "moved", transfer: done, goal: undefined, text: "Skipped. $25.77 moved to savings", line: null },
+    { tag: "pending", transfer: { status: "pending", amount_cents: 2577 }, goal: undefined, text: "Skipped. Savings update pending", line: null },
+    { tag: "no-price", transfer: { status: "no_price", amount_cents: null }, goal: undefined, text: "Skipped. No price, so nothing moved", line: null },
+    { tag: "goal-progress", transfer: done, goal, text: "Skipped. $25.77 moved to savings", line: "$340 of $2,000 for Japan trip" },
+    { tag: "goal-cents", transfer: done, goal: { ...goal, target_cents: 1250050, saved_cents: 34099 }, text: "Skipped. $25.77 moved to savings", line: "$340.99 of $12,500.50 for Japan trip" },
+    { tag: "goal-reached", transfer: done, goal: { ...goal, saved_cents: 201577, reached: true }, text: "Skipped. $25.77 moved to savings", line: "Japan trip: you made it" },
+    { tag: "goal-html-name", transfer: done, goal: { name: "<b>New bike</b>", target_cents: 50000, saved_cents: 12345, reached: false }, text: "Skipped. $25.77 moved to savings", line: "$123.45 of $500 for <b>New bike</b>" },
   ];
   for (const v of variants) {
-    for (const c of GOAL_CASES) {
+    for (const c of NOTICE_CASES) {
       const data = { ok: true, balances, transfer: c.transfer, ...(c.goal ? { goal: c.goal } : {}) };
       const s = await open(browser, { ...v, response: RESPONSES.have, action: { data } });
       await s.card.locator(".badge").waitFor();
-      await s.card.getByRole("button", { name: "Skip it" }).click();
-      await s.card.locator(".status").filter({ hasText: "Skipped." }).waitFor({ timeout: 3000 });
-      const line = s.card.locator(".goal-line");
-      const visible = await line.isVisible();
+      await s.card.getByRole("button", { name: "Skip it", exact: true }).click();
+      const notice = s.page.locator("#secondlook-shadow-host .notice");
+      await notice.waitFor({ timeout: 3000 });
       if (v.tag === "desktop-light") {
-        if (c.line == null) {
-          check(!visible && (await line.textContent()) === "", `goal ${c.tag}: no goal line`);
-        } else {
-          check(visible && (await line.textContent()) === c.line, `goal ${c.tag}: "${c.line}"`, await line.textContent());
-        }
-        check(/^Skipped\./.test((await s.card.locator(".status").innerText()).trim()), `goal ${c.tag}: skip message unchanged`);
-        check(await s.card.locator(".goal-line b, .card button:not(.icon-btn):not(.btn)").count() === 0, `goal ${c.tag}: no injected HTML, no new buttons`);
-        check(await s.page.locator("body > .goal-line, body b").count() === 0, `goal ${c.tag}: nothing leaks out of the shadow root`);
+        const main = (await notice.locator("span").first().innerText()).split("\n")[0].trim();
+        check(main === c.text, `notice ${c.tag}: "${c.text}"`, main);
+        const sub = notice.locator(".notice-sub");
+        if (c.line == null) check(await sub.count() === 0, `notice ${c.tag}: no goal line`);
+        else check((await sub.textContent()) === c.line, `notice ${c.tag}: goal line "${c.line}"`, await sub.count() ? await sub.textContent() : "missing");
+        check(await notice.locator("b, button").count() === 0, `notice ${c.tag}: no injected HTML, no buttons`);
+        check(await s.page.locator("body > .notice, body b").count() === 0, `notice ${c.tag}: nothing leaks out of the shadow root`);
       }
-      shots.push(await shot(s.page, `goal-${c.tag}-${v.tag}`));
+      shots.push(await shot(s.page, `notice-${c.tag}-${v.tag}`));
       errors.push(...s.page.errors); await s.ctx.close();
     }
   }
-  // a goal never shows after Buy anyway or a failed skip
+  // no savings notice after Buy, or when the skip could not be saved
   for (const [tag, click, action] of [
-    ["bought", "Buy anyway", { data: { ok: true, balances, goal: { name: "Japan trip", target_cents: 200000, saved_cents: 34000, reached: false } } }],
+    ["bought", "Buy anyway", { data: { ok: true, balances, goal } }],
     ["error", "Skip it", { code: "offline", error: "Cannot reach the Second Look server." }],
   ]) {
     const s = await open(browser, { width: 1280, scheme: "light", response: RESPONSES.have, action });
     await s.card.locator(".badge").waitFor();
-    await s.card.getByRole("button", { name: click }).click();
-    await s.card.locator(".status").filter({ hasNotText: "Saving..." }).waitFor({ timeout: 3000 });
-    check(!(await s.card.locator(".goal-line").isVisible()), `goal ${tag}: no goal line`);
+    await s.card.getByRole("button", { name: click, exact: true }).click();
+    await sleep(600);
+    const text = await s.page.locator("#secondlook-shadow-host .notice").allInnerTexts();
+    check(!text.some((t) => /Skipped\.|Japan trip/.test(t)), `notice ${tag}: no savings notice`, JSON.stringify(text));
     errors.push(...s.page.errors); await s.ctx.close();
   }
 
