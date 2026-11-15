@@ -1,0 +1,8 @@
+{
+  "description": "Whole-run spend caps for the Social Trend Radar agent, in USD. Enforced by scripts/radar_spend.py before every paid call. Totals are the code's estimates from config/radar_prices.json; provider usage pages are the true numbers.",
+  "warn_fraction": 0.8,
+  "providers": {
+    "claude": {"cap_usd": 400},
+    "vultr": {"cap_usd": 100}
+  }
+}
