@@ -33,7 +33,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-.stage { position: fixed; inset: 0; }
+.stage { position: fixed; inset: 0; z-index: 1; }
+.overlay { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
 .stage canvas { outline: none; }
 
 .visually-hidden {

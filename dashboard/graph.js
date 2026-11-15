@@ -102,20 +102,21 @@
       const angle = i * 2.399963;
       g.addNode(`c${c.id}`, {
         x: anchor.x + Math.cos(angle) * 12, y: anchor.y + Math.sin(angle) * 12,
-        size: 1.6 + Math.sqrt(c.authors) * 0.2, color: alpha(c.color, 0.7), baseColor: c.color,
+        size: 1.3 + Math.sqrt(c.authors) * 0.14, color: alpha(c.color, 0.62), baseColor: c.color,
         label: c.name, kind: "community", ref: c.id, family: c.family,
       });
     });
     // A community attaches only to the styles that define it: up to three with at least a
     // 15 percent share of its style posts. Every link is still listed in the inspector.
-    communities.forEach(({ id: c, top_styles: rows }) => {
+    communities.forEach(({ id: c, top_styles: rows, authors: size }) => {
       const total = rows.reduce((sum, [, p]) => sum + p, 0);
+      const presence = Math.min(1, 0.35 + Math.log10(1 + size) * 0.4);
       rows.forEach(([s, posts], rank) => {
         const share = posts / total;
         if (rank > 2 || (rank > 0 && share < 0.15)) return;
         g.mergeEdge(`s${s}`, `c${c}`, {
-          weight: 1 + share * 6, kind: "membership", color: alpha(styles[s].color, 0.16 + share * 0.3),
-          size: 0.5 + share * 2.2,
+          weight: 1 + share * 6, kind: "membership", color: alpha(styles[s].color, (0.08 + share * 0.24) * presence),
+          size: (0.3 + share * 1.3) * presence,
         });
       });
     });
@@ -180,7 +181,7 @@
       const edgeColor = key === "similarity" ? alpha(color, 0.05) : alpha(color, 0.3);
       for (let k = 0; k < flat.length; k += 2) {
         g.addEdgeWithKey(`${key}${k}`, `a${flat[k]}`, `a${flat[k + 1]}`, {
-          kind: key, color: edgeColor, size: key === "similarity" ? 0.3 : 0.6,
+          kind: key, color: edgeColor, size: key === "similarity" ? 0.3 : 0.6, path: key === "similarity" ? "line" : "curved",
         });
       }
     });
@@ -240,58 +241,36 @@
   function makeRenderer(g) {
     if (state.renderer) state.renderer.kill();
     const isAuthors = state.view === "authors";
-    // On phones the style labels are culled by density and revealed by zooming.
-    const narrow = window.innerWidth < 760;
     const renderer = new Sigma(g, $("stage"), {
       settings: {
+        // Labels and glows are drawn by drawOverlay() for halo text and real collision culling.
+        renderLabels: false,
         hideEdgesOnMove: isAuthors,
-        labelRenderedSizeThreshold: isAuthors ? 9 : 4,
-        labelDensity: isAuthors ? 0.4 : 0.8, labelGridCellSize: 90,
         zIndex: true, minCameraRatio: 0.02, maxCameraRatio: 4,
         // Sizes are screen pixels that grow gently on zoom, like Obsidian's graph view.
         itemSizesReference: "screen", zoomToSizeRatioFunction: (ratio) => Math.pow(ratio, 0.35),
-        stagePadding: 60,
+        stagePadding: 70,
       },
-      customGraphState: { focus: false, closeUp: false, litCount: 0 },
-      primitives: { depthLayers: ["edges", "nodes", "litEdges", "litNodes", "topNodes"] },
+      customGraphState: { focus: false },
+      primitives: {
+        depthLayers: ["edges", "nodes", "litEdges", "litNodes", "topNodes"],
+        // Threads: gently curved edges; straight lines for the dense similarity layer.
+        edges: { paths: [Sigma.rendering.pathLine(), Sigma.rendering.pathCurved({ curvature: 0.22, segments: 16 })] },
+      },
       styles: {
         nodes: [
           DEFAULT_STYLES.nodes,
-          {
-            color: { attribute: "color" }, size: { attribute: "size" }, label: { attribute: "label" },
-            labelColor: "#ECE8F7", labelSize: 13,
-            // Dark hover card instead of sigma's default white backdrop.
-            backdropColor: "rgba(32, 28, 56, 0.96)", backdropShadowColor: "rgba(5, 3, 15, 0.6)", backdropShadowBlur: 18,
-            labelFont: '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif',
-          },
-          { when: (a) => a.kind === "style", then: { labelSize: 15, labelVisibility: isAuthors || narrow ? "auto" : "visible",
-            labelBackgroundColor: "rgba(23, 20, 42, 0.72)", labelBackgroundPadding: 3 } },
-          { when: (a) => a.kind === "community", then: { labelColor: "rgba(236, 232, 247, 0.66)", labelSize: 11.5 } },
-          // Community labels appear on zoom, hover or selection so style names stay readable.
-          { when: (a, _s, gs) => a.kind === "community" && !a.anchor && !gs.closeUp, then: { labelVisibility: "hidden" } },
-          { when: (a) => a.anchor, then: { labelSize: 13, labelColor: "#ECE8F7", labelPosition: "over",
-            labelBackgroundColor: "rgba(23, 20, 42, 0.78)", labelBackgroundPadding: 4 } },
-          { when: (a) => a.anchor === "major", then: { labelVisibility: "visible", labelSize: 14 } },
-          { when: (a) => !nodeVisible(a), then: { color: DIM, label: "" } },
-          { when: (_a, s, gs) => gs.focus && !s.lit, then: { color: DIM, label: "" } },
+          { color: { attribute: "color" }, size: { attribute: "size" }, label: { attribute: "label" }, backdropVisibility: "hidden" },
+          { when: (a) => !nodeVisible(a), then: { color: DIM } },
+          { when: (_a, s, gs) => gs.focus && !s.lit, then: { color: DIM } },
           { whenState: "lit", then: { depth: "litNodes" } },
-          { when: (a, s) => s.lit && a.kind === "style", then: { labelVisibility: "visible" } },
-          { when: (a, s) => s.lit && a.kind === "community", then: { labelVisibility: "auto" } },
-          { when: (a, s, gs) => s.lit && a.kind === "author" && gs.litCount <= 25, then: { labelVisibility: "visible", labelSize: 12 } },
-          {
-            whenState: "isHovered",
-            then: { depth: "topNodes", labelVisibility: "visible", labelColor: "#ECE8F7",
-              labelBackgroundColor: "rgba(23, 20, 42, 0.92)", labelBackgroundPadding: 4 },
-          },
-          {
-            whenState: "selected",
-            then: { depth: "topNodes", labelVisibility: "visible", labelSize: 16, labelColor: "#ECE8F7",
-              labelBackgroundColor: "rgba(23, 20, 42, 0.92)", labelBackgroundPadding: 4 },
-          },
+          { whenState: "isHovered", then: { depth: "topNodes" } },
+          { whenState: "selected", then: { depth: "topNodes" } },
         ],
         edges: [
           DEFAULT_STYLES.edges,
-          { color: { attribute: "color" }, size: { attribute: "size" } },
+          { color: { attribute: "color" }, size: { attribute: "size" }, path: { attribute: "path", defaultValue: "curved" },
+            curvature: { attribute: "curvature", defaultValue: 0.24 } },
           { when: (a) => state.hiddenKinds.has(a.kind), then: { visibility: "hidden" } },
           { when: (a, s) => a.kind === "membership-minor" && !s.lit, then: { visibility: "hidden" } },
           { when: (_a, s, gs) => gs.focus && !s.lit, then: { visibility: "hidden" } },
@@ -299,17 +278,154 @@
         ],
       },
     });
-    renderer.getCamera().on("updated", ({ ratio }) => {
-      const closeUp = ratio < 0.45;
-      if (closeUp !== renderer.getGraphState().closeUp) renderer.setGraphState({ closeUp });
-    });
+    renderer.on("afterRender", drawOverlay);
     renderer.on("enterNode", ({ node, event }) => { state.hovered = node; applyFocus(); showTooltip(node, event); });
     renderer.on("leaveNode", () => { state.hovered = null; applyFocus(); $("tooltip").hidden = true; });
     renderer.on("clickNode", ({ node }) => select(node, { animate: true, keepZoom: true }));
     renderer.on("clickStage", () => clearSelection());
     state.renderer = renderer;
     state.graph = g;
+    // The constructor renders before state points at this graph; redraw the overlay for it now.
+    drawOverlay();
     return renderer;
+  }
+
+  // ---------- overlay: glows under the WebGL canvas, haloed labels above it ----------
+
+  const SERIF = '"Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif';
+  const overlay = { glow: null, labels: null };
+
+  function overlayCanvas(id, z) {
+    let canvas = document.getElementById(id);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      canvas.id = id;
+      canvas.className = "overlay";
+      canvas.style.zIndex = z;
+      document.body.insertBefore(canvas, $("stage").nextSibling);
+    }
+    const dpr = window.devicePixelRatio || 1;
+    const w = window.innerWidth, h = window.innerHeight;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    return ctx;
+  }
+
+  function screenNode(node) {
+    const { renderer } = state;
+    const d = renderer.getNodeDisplayData(node);
+    if (!d) return null;
+    const p = renderer.framedGraphToViewport({ x: d.x, y: d.y });
+    return { x: p.x, y: p.y, r: renderer.scaleSize(d.size), d };
+  }
+
+  function drawOverlay() {
+    const { renderer, graph } = state;
+    if (!renderer || !graph) return;
+    const glow = overlayCanvas("glow-layer", 0);
+    const labels = overlayCanvas("label-layer", 2);
+    const W = window.innerWidth, H = window.innerHeight;
+    const focus = renderer.getGraphState().focus;
+    const ratio = renderer.getCamera().getState().ratio;
+    const onScreen = (p) => p && p.x > -60 && p.x < W + 60 && p.y > -60 && p.y < H + 60;
+
+    // Soft glows behind style nodes and anything lit, so the graph reads like light, not flat paper.
+    glow.globalCompositeOperation = "lighter";
+    graph.forEachNode((node, a) => {
+      const st = renderer.getNodeState(node);
+      const important = a.kind === "style" || st.lit || node === state.selected;
+      if (!important || (focus && !st.lit) || !nodeVisible(a)) return;
+      const p = screenNode(node);
+      if (!onScreen(p)) return;
+      const base = a.baseColor || a.color;
+      const radius = p.r * (node === state.selected || node === state.hovered ? 5 : 3.4);
+      const gradient = glow.createRadialGradient(p.x, p.y, p.r * 0.6, p.x, p.y, radius);
+      gradient.addColorStop(0, alpha(base.startsWith("#") ? base : "#ECE8F7", node === state.selected ? 0.42 : 0.24));
+      gradient.addColorStop(1, alpha(base.startsWith("#") ? base : "#ECE8F7", 0));
+      glow.fillStyle = gradient;
+      glow.beginPath(); glow.arc(p.x, p.y, radius, 0, Math.PI * 2); glow.fill();
+    });
+
+    // Labels in priority order. A label is skipped if its box would overlap one already drawn.
+    const candidates = [];
+    const add = (node, a, priority) => candidates.push({ node, a, priority });
+    graph.forEachNode((node, a) => {
+      const st = renderer.getNodeState(node);
+      if (!nodeVisible(a) && node !== state.selected) return;
+      if (node === state.selected) return add(node, a, 0);
+      if (node === state.hovered) return add(node, a, 1);
+      if (focus) {
+        if (!st.lit) return;
+        if (a.kind === "style") return add(node, a, 2);
+        if (a.kind === "community") return add(node, a, 3 + 1 / (1 + (a.size || 0)));
+        return add(node, a, 4 + 1 / (1 + (a.size || 0)));
+      }
+      if (a.kind === "style") return add(node, a, 2 + 1 / (1 + a.size));
+      if (a.anchor) return add(node, a, a.anchor === "major" ? 3 : 5);
+      if (a.kind === "community" && ratio < 0.45) return add(node, a, 6 + 1 / (1 + a.size));
+    });
+    candidates.sort((x, y) => x.priority - y.priority);
+    const placed = [];
+    // Style nodes reserve their own disc so no label is drawn over them.
+    graph.forEachNode((node, a) => {
+      if (a.kind !== "style" || (focus && !renderer.getNodeState(node).lit)) return;
+      const p = screenNode(node);
+      if (onScreen(p)) placed.push({ x: p.x - p.r, y: p.y - p.r, w: p.r * 2, h: p.r * 2 });
+    });
+    const overlaps = (box) => placed.some((b) => box.x < b.x + b.w && box.x + box.w > b.x && box.y < b.y + b.h && box.y + box.h > b.y);
+    labels.textBaseline = "middle";
+    labels.lineJoin = "round";
+    for (const { node, a, priority } of candidates) {
+      const p = screenNode(node);
+      if (!onScreen(p)) continue;
+      const strong = priority < 2 || a.kind === "style" || a.anchor === "major";
+      const size = node === state.selected ? 17 : a.kind === "style" ? (a.size > 14 ? 16 : 14.5) : a.anchor ? 14 : 12.5;
+      labels.font = `${a.kind === "author" ? "500 " : ""}${size}px ${a.kind === "author" ? "-apple-system, system-ui, sans-serif" : SERIF}`;
+      const text = a.label;
+      const width = labels.measureText(text).width;
+      // Candidate spots: right of the node first; styles may also sit left, above or below.
+      const gap = p.r + 7;
+      const spots = a.anchor ? [[p.x - width / 2, p.y]]
+        : a.kind === "style" || priority < 2 ? [[p.x + gap, p.y], [p.x - gap - width, p.y]] : [[p.x + gap, p.y]];
+      let chosen = null;
+      for (const [x, y] of spots) {
+        const pad = a.anchor ? 12 : 3;
+        const box = { x: x - pad, y: y - size * 0.62 - (a.anchor ? 4 : 0), w: width + pad * 2, h: size * 1.24 + (a.anchor ? 8 : 0) };
+        if (priority < 2 || !overlaps(box)) { chosen = { x, y, box }; break; }
+      }
+      if (!chosen) continue;
+      placed.push(chosen.box);
+      if (a.anchor) {
+        // Over busy author discs a soft pill reads better than a text halo.
+        const padX = 9, h = size + 10, x0 = chosen.x - padX, y0 = chosen.y - h / 2, w0 = width + padX * 2;
+        labels.fillStyle = "rgba(19, 16, 36, 0.74)";
+        labels.beginPath();
+        labels.roundRect ? labels.roundRect(x0, y0, w0, h, h / 2) : labels.rect(x0, y0, w0, h);
+        labels.fill();
+        labels.fillStyle = a.anchor === "major" ? "#ECE8F7" : "rgba(236, 232, 247, 0.78)";
+        labels.fillText(text, chosen.x, chosen.y);
+        continue;
+      }
+      labels.lineWidth = 4.5;
+      labels.strokeStyle = "rgba(19, 16, 36, 0.88)";
+      labels.strokeText(text, chosen.x, chosen.y);
+      labels.fillStyle = strong ? "#ECE8F7" : "rgba(236, 232, 247, 0.68)";
+      labels.fillText(text, chosen.x, chosen.y);
+    }
+
+    // Rings mark the hovered and selected nodes.
+    for (const node of [state.hovered, state.selected]) {
+      if (!node || !graph.hasNode(node)) continue;
+      const p = screenNode(node);
+      if (!onScreen(p)) continue;
+      labels.lineWidth = 1.5;
+      labels.strokeStyle = "rgba(236, 232, 247, 0.85)";
+      labels.beginPath(); labels.arc(p.x, p.y, p.r + 4, 0, Math.PI * 2); labels.stroke();
+    }
   }
 
   function applyFocus() {
@@ -328,7 +444,7 @@
     graph.forEachEdge((edge, attrs, source, target) => {
       renderer.setEdgeState(edge, { lit: !!anchor && (source === anchor || target === anchor) });
     });
-    renderer.setGraphState({ focus: !!anchor, litCount: lit.size });
+    renderer.setGraphState({ focus: !!anchor });
     renderer.refresh({ skipIndexation: true });
   }
 
@@ -387,10 +503,13 @@
     });
     const container = $("stage");
     const unitsPerPx = Math.max((maxX - minX) / (container.clientWidth * 0.62), (maxY - minY) / (container.clientHeight * 0.82));
-    const boxes = styles.map(({ node, a }) => ({
-      node, x: a.x, y: a.y,
-      w: (a.size * 2 + 10 + a.label.length * 8.2) * unitsPerPx, h: 22 * unitsPerPx, r: a.size * unitsPerPx,
-    }));
+    const measure = document.createElement("canvas").getContext("2d");
+    const boxes = styles.map(({ node, a }) => {
+      // Same font as drawOverlay, plus the halo and a little air.
+      measure.font = `${a.size > 14 ? 16 : 14.5}px ${SERIF}`;
+      const textWidth = measure.measureText(a.label).width;
+      return { node, x: a.x, y: a.y, w: (a.size + 7 + textWidth + 14) * unitsPerPx, h: 24 * unitsPerPx, r: a.size * unitsPerPx };
+    });
     for (let pass = 0; pass < 120; pass++) {
       let moved = false;
       for (let i = 0; i < boxes.length; i++) {
@@ -413,6 +532,50 @@
     boxes.forEach((b) => g.mergeNodeAttributes(b.node, { y: b.y }));
   }
 
+  // Second pass using the renderer's real scale: measured text and node radii, separated in graph units.
+  function separateOnScreen(g) {
+    const { renderer } = state;
+    const o = renderer.viewportToGraph({ x: 0, y: 0 }), e = renderer.viewportToGraph({ x: 100, y: 0 });
+    const unitsPerPx = Math.hypot(e.x - o.x, e.y - o.y) / 100;
+    const measure = document.createElement("canvas").getContext("2d");
+    const items = [];
+    g.forEachNode((node, a) => {
+      if (a.kind !== "style") return;
+      const r = renderer.scaleSize(a.size);
+      measure.font = `${a.size > 14 ? 16 : 14.5}px ${SERIF}`;
+      const w = measure.measureText(a.label).width;
+      // Clear zone: the node disc plus its label to the right, in graph units.
+      items.push({ node, x: a.x, y: a.y, left: (r + 6) * unitsPerPx, right: (r + 7 + w + 8) * unitsPerPx,
+        half: (Math.max(r, 11) + 3) * unitsPerPx });
+    });
+    let passes = 0;
+    for (; passes < 800; passes++) {
+      let moved = false;
+      for (let i = 0; i < items.length; i++) {
+        for (let j = i + 1; j < items.length; j++) {
+          const A = items[i], B = items[j];
+          const ox = Math.min(A.x + A.right, B.x + B.right) - Math.max(A.x - A.left, B.x - B.left);
+          const oy = Math.min(A.y + A.half, B.y + B.half) - Math.max(A.y - A.half, B.y - B.half);
+          if (ox > 0 && oy > 0) {
+            // Separate along the axis that needs the smaller move.
+            if (oy <= ox) {
+              const dir = A.y <= B.y ? -1 : 1, d = oy / 2 + unitsPerPx * 0.5;
+              A.y += dir * d; B.y -= dir * d;
+            } else {
+              const dir = A.x <= B.x ? -1 : 1, d = ox / 2 + unitsPerPx * 0.5;
+              A.x += dir * d; B.x -= dir * d;
+            }
+            moved = true;
+          }
+        }
+      }
+      if (!moved) break;
+    }
+    state.labelPasses = passes;
+    items.forEach((it) => g.mergeNodeAttributes(it.node, { x: it.x, y: it.y }));
+    renderer.refresh();
+  }
+
   // ---------- views ----------
 
   function showMap() {
@@ -432,7 +595,9 @@
       separateStyleLabels(g);
       state.mapPositions = {};
       g.forEachNode((node, a) => { state.mapPositions[node] = { x: a.x, y: a.y }; });
-      state.renderer.getCamera().reset({ duration: REDUCED_MOTION ? 0 : 600 });
+      // Refine label spacing at the renderer's real scale, then store the final positions.
+      separateOnScreen(g);
+      g.forEachNode((node, a) => { state.mapPositions[node] = { x: a.x, y: a.y }; });
       if (state.pendingView === "authors") { state.pendingView = null; showAuthors(); return; }
       restoreSelection();
     });
@@ -827,6 +992,7 @@
       return renderer.framedGraphToViewport({ x: d.x, y: d.y });
     },
     ready: () => !!state.mapPositions,
+    labelPasses: () => state.labelPasses ?? null,
     overlaps: () => state.clusterOverlaps,
   };
 
