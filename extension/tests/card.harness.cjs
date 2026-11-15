@@ -48,6 +48,26 @@ const RESPONSES = {
     alternatives: [{ name: "Classic straight-leg version", url: null, price: 48, reason: "Stub" }], outfits: [], expected_wears: null, cost_per_wear: null },
 };
 
+// Optional radar field (style match from the Bluesky sample). Each state renders on top of the trend response.
+const RADAR = {
+  matched: { matched_style: "Barrel-leg denim", similarity: 0.82, label: "micro_trend", confidence: "medium",
+    summary: "Rose fast in the sample over 3 weeks and is already fading.", weeks_to_rise: 3, weeks_active: 5,
+    evidence_note: "Bluesky sample, 214 posts", timeline_url: "https://radar.example/timeline?style=barrel" },
+  "agent-unknown": { matched_style: "Wide cargo pants", similarity: 0.71, label: "unknown", confidence: "low",
+    summary: "The agent could not tell rise from noise for this style.", weeks_to_rise: null, weeks_active: 2,
+    evidence_note: "Bluesky sample, 38 posts", timeline_url: "https://radar.example/timeline?style=cargo" },
+  "no-decision": { matched_style: "Ballet flats", similarity: 0.66, label: "unknown", confidence: "low",
+    summary: "No agent decision for this style.", weeks_to_rise: null, weeks_active: null,
+    evidence_note: "Bluesky sample, 12 posts", timeline_url: null },
+  "no-match": { matched_style: null, similarity: null, label: "unknown", confidence: "low",
+    summary: "No matching style in our Bluesky sample.", weeks_to_rise: null, weeks_active: null,
+    evidence_note: "Bluesky sample, 0 posts", timeline_url: "javascript:alert(1)" },
+};
+// The card as it rendered before the radar code path existed: same scripts with the radar call removed.
+const RADAR_CALL = "      ...radarDetails(result.radar),\n";
+const SCRIPTS_NO_RADAR = SCRIPTS.map((code) => code.replace(RADAR_CALL, ""));
+if (!SCRIPTS.some((code) => code.includes(RADAR_CALL))) throw new Error("radar call not found in card.js");
+
 const OWNERSHIP = { show: true, staple_idea: "Idea: a white tee pairs with these.", options: [
   { label: "Blue straight jeans", attributes: { category: "jeans", color_family: "blue", cut: "straight" } },
   { label: "Black slim jeans", attributes: { category: "jeans", color_family: "black", cut: "slim" } },
@@ -60,7 +80,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // mode: "ok" | "never" (loading) | "offline" | "timeout"
 // action: what SEND_ACTION answers. { data } resolves, { error, code } fails, delayMs waits first.
-async function open(browser, { width, scheme, response, mode = "ok", action = { data: { ok: true } } }) {
+async function open(browser, { width, scheme, response, mode = "ok", action = { data: { ok: true } }, scripts = SCRIPTS }) {
   const ctx = await browser.newContext({ viewport: { width, height: width < 500 ? 844 : 800 }, colorScheme: scheme, deviceScaleFactor: 2 });
   const page = await ctx.newPage();
   page.errors = [];
@@ -96,7 +116,7 @@ async function open(browser, { width, scheme, response, mode = "ok", action = { 
     } } };
     window.SecondLookReader = { readItem: async () => item };
   }, { response, mode, item: ITEM, ownership: OWNERSHIP, action });
-  for (const code of SCRIPTS) await page.addScriptTag({ content: code });
+  for (const code of scripts) await page.addScriptTag({ content: code });
   await page.evaluate(() => { globalThis.SecondLookFlow.runCheck(); }); // do not wait: "never" mode stays pending
   return { ctx, page, card: page.locator("#secondlook-shadow-host .card") };
 }
@@ -161,6 +181,30 @@ async function shot(page, name) {
     check(await s.card.locator(".social-chatter button").count() === 0, `social: no new buttons ${v.tag}`);
     check(await s.card.locator(".social-chatter a").count() === 0, `social: no link without a page ${v.tag}`);
     shots.push(await shot(s.page, `social-${v.tag}`)); await done(s);
+
+    // Radar: matched, unknown (agent unknown, no agent decision, no match). Label, style, summary, evidence, timeline link.
+    for (const [tag, radar] of Object.entries(RADAR)) {
+      s = await open(browser, { ...v, response: { ...RESPONSES.trend, radar } });
+      const box = s.card.locator(".radar");
+      await box.waitFor();
+      const want = { micro_trend: "Micro trend", unknown: "Unknown" }[radar.label];
+      // textContent: the label text itself; the theme lowercases it on screen
+      check((await box.locator(".radar-label").textContent()) === want, `radar ${tag}: label "${want}" ${v.tag}`);
+      check(await box.locator(".radar-style").count() === (radar.matched_style ? 1 : 0)
+        && (!radar.matched_style || (await box.locator(".radar-style").textContent()) === radar.matched_style), `radar ${tag}: matched style ${v.tag}`);
+      check((await box.locator(".radar-summary").textContent()) === radar.summary, `radar ${tag}: summary ${v.tag}`);
+      check((await box.locator(".radar-evidence").textContent()) === radar.evidence_note && /Bluesky sample/.test(radar.evidence_note), `radar ${tag}: evidence note ${v.tag}`);
+      const link = box.locator("a.radar-link");
+      if (/^https?:/.test(radar.timeline_url || "")) {
+        check(await link.count() === 1 && (await link.getAttribute("href")) === radar.timeline_url
+          && (await link.getAttribute("target")) === "_blank" && (await link.getAttribute("rel")).includes("noopener"), `radar ${tag}: timeline link new tab, noopener ${v.tag}`);
+      } else {
+        check(await link.count() === 0 && await box.locator("a").count() === 0, `radar ${tag}: no link without an http(s) timeline ${v.tag}`);
+      }
+      check(await box.locator("button").count() === 0, `radar ${tag}: no buttons ${v.tag}`);
+      check(await s.page.locator("body .radar").count() === 0, `radar ${tag}: stays inside the shadow root ${v.tag}`);
+      shots.push(await shot(s.page, `radar-${tag}-${v.tag}`)); await done(s);
+    }
 
     // good_buy: reason and the wears line labeled estimate
     s = await open(browser, { ...v, response: RESPONSES.good });
@@ -323,6 +367,20 @@ async function shot(page, name) {
     check(await s.card.locator(".own").count() === 0, "old backend: no ownership question");
     shots.push(await shot(s.page, "old-backend-desktop-light"));
     errors.push(...s.page.errors); await s.ctx.close();
+  }
+
+  // Radar absent (flag off or timeout): the card DOM is identical to the card rendered without the radar code path.
+  for (const [tag, response] of [["trend", RESPONSES.trend], ["good", RESPONSES.good], ["have", RESPONSES.have]]) {
+    const html = [];
+    for (const scripts of [SCRIPTS_NO_RADAR, SCRIPTS]) {
+      const s = await open(browser, { width: 1280, scheme: "light", response, scripts });
+      await s.card.locator(".badge").waitFor();
+      await sleep(450);
+      check(await s.card.locator(".radar").count() === 0, `radar absent ${tag}: no radar element${scripts === SCRIPTS ? "" : " (baseline)"}`);
+      html.push(await s.page.evaluate(() => document.getElementById("secondlook-shadow-host").shadowRoot.innerHTML));
+      errors.push(...s.page.errors); await s.ctx.close();
+    }
+    check(html[0] === html[1], `radar absent ${tag}: card DOM identical to before`, html[0] === html[1] ? "" : `${html[0].length} vs ${html[1].length}`);
   }
 
   check(errors.length === 0, "no console or page errors", errors.join(" | "));

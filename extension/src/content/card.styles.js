@@ -178,6 +178,21 @@
     .wears { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
     .tag { font-size: 11px; font-weight: 600; padding: 1px 6px; border-radius: 6px; color: var(--muted); background: var(--soft); }
 
+    /* Radar: optional style match from the Bluesky sample, same surface as the trend block */
+    .radar { display: grid; gap: 2px; margin-bottom: 12px; padding: 10px 12px; border-radius: 10px; background: var(--soft); font-size: 13px; }
+    .radar-head { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+    .radar-label.micro_trend { color: var(--trend); background: var(--bg); }
+    .radar-label.established, .radar-label.still_active { color: var(--good); background: var(--bg); }
+    .radar-label.unknown { background: var(--bg); }
+    .radar-style { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .radar-summary { text-wrap: pretty; }
+    .radar-meta { display: flex; align-items: baseline; gap: 10px; margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .radar-evidence { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    a.radar-link { flex: none; margin-left: auto; color: var(--muted); text-decoration: underline; text-decoration-color: var(--line);
+                   text-underline-offset: 2px; border-radius: 4px; transition: color 150ms ease-out; }
+    a.radar-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    @media (hover: hover) { a.radar-link:hover { color: var(--ink); } }
+
     /* Full analysis (POST /analyze/details), collapsible, above the action buttons */
     .analysis-loading { margin-bottom: 12px; font-size: 12px; color: var(--muted); }
     .analysis { margin-bottom: 12px; border-radius: 12px; background: var(--soft); font-size: 13px; }

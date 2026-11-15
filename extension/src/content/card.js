@@ -254,6 +254,7 @@
       el("p", { class: "reason", text: result.reason }),
       ...verdictDetails(result),
       ...socialDetails(result.social_context),
+      ...radarDetails(result.radar),
       actions,
       status,
     );
@@ -472,6 +473,36 @@
       page ? el("a", { href: page, target: "_blank", rel: "noopener noreferrer", text: copy }) : el("span", { text: copy }),
       el("span", { class: "tag", text: "Estimate" }),
     ])];
+  }
+
+  // Radar: optional style match from the Bluesky sample. The label is the agent's stored decision, never a market fact.
+  // Absent field adds nothing, so the card DOM stays exactly as before.
+  const RADAR_LABELS = { micro_trend: "Micro trend", established: "Established", still_active: "Still active", unknown: "Unknown" };
+  function radarDetails(radar) {
+    if (!radar || typeof radar !== "object") return [];
+    const text = (v) => (typeof v === "string" ? v.trim() : "");
+    const label = Object.prototype.hasOwnProperty.call(RADAR_LABELS, radar.label) ? radar.label : "unknown";
+    const style = text(radar.matched_style);
+    const summary = text(radar.summary);
+    const evidence = text(radar.evidence_note);
+    let timeline = null;
+    try {
+      const url = new URL(radar.timeline_url);
+      if (/^https?:$/.test(url.protocol)) timeline = url.href;
+    } catch { /* No timeline was advertised by the backend. */ }
+    const meta = [
+      evidence ? el("span", { class: "radar-evidence", text: evidence }) : null,
+      timeline ? el("a", { class: "radar-link", href: timeline, target: "_blank", rel: "noopener noreferrer", text: "Timeline" }) : null,
+    ].filter(Boolean);
+    return [el("div", { class: "radar", "data-radar": label }, [
+      el("div", { class: "radar-head" }, [
+        el("span", { class: "section-label", text: "Radar" }),
+        el("span", { class: `tag radar-label ${label}`, text: RADAR_LABELS[label] }),
+      ]),
+      style ? el("p", { class: "radar-style", text: style }) : null,
+      summary ? el("p", { class: "radar-summary", text: summary }) : null,
+      meta.length ? el("p", { class: "radar-meta" }, meta) : null,
+    ].filter(Boolean))];
   }
 
   function verdictDetails(r) {
