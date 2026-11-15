@@ -1,7 +1,9 @@
-"""Resumable Gemini embeddings and Atlas index for the sampled Bluesky corpus.
+"""Resumable Social Radar embeddings and Atlas vector index for the sampled Bluesky corpus.
 
-Run with --dry-run to inspect volume without making model calls. Each post is a
-separate Gemini input. --limit is a per-run budget, not an ingest cap.
+SOCIAL_EMBED_PROVIDER (vultr default, or gemini) selects model, dimensions, vector field
+and index through backend.services.social_embeddings. Vultr requests carry a list of
+posts (--request-size) and run --workers requests in parallel. Run with --dry-run to
+inspect volume without model calls. --limit is a per-run budget, not an ingest cap.
 """
 import argparse
 import json
@@ -15,23 +17,28 @@ from threading import Event
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-MODEL = "gemini-embedding-2"
-DIMENSIONS = 768
-INDEX_NAME = "social_posts_vector"
-INDEX_DEFINITION = {"fields": [
-    {"type": "vector", "path": "embedding", "numDimensions": DIMENSIONS, "similarity": "cosine"},
-    {"type": "filter", "path": "term"},
-    {"type": "filter", "path": "created_at"},
-]}
-PENDING = {"text": {"$type": "string", "$ne": ""}, "$or": [
-    {"embedding_model": {"$ne": MODEL}}, {"embedding": {"$exists": False}},
-    {"embedding": None},
-]}
+from backend.services import social_embeddings as provider  # noqa: E402
+
+SPEC = provider.spec()
+MODEL, DIMENSIONS, FIELD, INDEX_NAME = SPEC.model, SPEC.dims, SPEC.field, SPEC.index
 
 
-def ensure_vector_index(collection, *, wait_seconds=300, sleep=time.sleep):
-    """Create or update only our index, and wait for its new definition."""
+def index_definition(spec=SPEC):
+    return {"fields": [
+        {"type": "vector", "path": spec.field, "numDimensions": spec.dims, "similarity": "cosine"},
+        {"type": "filter", "path": "term"},
+        {"type": "filter", "path": "created_at"},
+    ]}
+
+
+INDEX_DEFINITION = index_definition()
+PENDING = provider.pending_filter(SPEC)
+
+
+def ensure_vector_index(collection, *, wait_seconds=300, sleep=time.sleep, spec=SPEC):
+    """Create or update only this provider's index, and wait for its new definition."""
     from pymongo.operations import SearchIndexModel
+    INDEX_NAME, INDEX_DEFINITION = spec.index, index_definition(spec)
     existing = next(iter(collection.list_search_indexes(INDEX_NAME)), None)
     if existing is None:
         collection.create_search_index(SearchIndexModel(
@@ -42,7 +49,7 @@ def ensure_vector_index(collection, *, wait_seconds=300, sleep=time.sleep):
     while True:
         state = next(iter(collection.list_search_indexes(INDEX_NAME)), {})
         if state.get("status") == "FAILED":
-            raise RuntimeError("social_posts_vector index build failed")
+            raise RuntimeError(f"{INDEX_NAME} index build failed")
         if (state.get("queryable") and state.get("status") == "READY"
                 and state.get("latestDefinition") == INDEX_DEFINITION):
             return True
@@ -51,8 +58,8 @@ def ensure_vector_index(collection, *, wait_seconds=300, sleep=time.sleep):
         sleep(min(5, max(0.1, wait_seconds)))
 
 
-def valid_embedding(vector):
-    return (len(vector) == DIMENSIONS and all(math.isfinite(v) for v in vector)
+def valid_embedding(vector, dims=DIMENSIONS):
+    return (len(vector) == dims and all(math.isfinite(v) for v in vector)
             and sum(v * v for v in vector) > 0)
 
 
@@ -134,80 +141,111 @@ def safe_error_report(exc):
     return error
 
 
-def embed_posts(collection, embed_one, *, limit=1000, batch_size=32, workers=4,
-                attempts=4, sleep=time.sleep, transient_403_retries=0, on_progress=None):
-    """Flush successful vectors in bounded batches; failures remain resumable.
+_SPLIT_CODES = {400, 413, 422}
 
-    Do not send a list of posts as Gemini contents: that produces one merged
-    multimodal vector with this model rather than one vector per post.
+
+def embed_posts(collection, embed_batch, *, limit=1000, batch_size=256, request_size=32, workers=4,
+                attempts=4, sleep=time.sleep, transient_403_retries=0, on_progress=None, spec=SPEC,
+                max_backoff=30.0):
+    """Embed pending posts and flush successful vectors in bounded bulk writes.
+
+    embed_batch(texts) returns one vector per text, in order. Each call is one provider
+    request of at most request_size posts; workers requests run in parallel. Transient
+    failures back off exponentially (honoring a provider retry_after hint). 401/402/403
+    stop the job promptly; a 400/413/422 on a multi-post request is split into single
+    posts so one rejected text cannot stop the corpus. Failures remain resumable.
     """
-    if limit < 0 or batch_size < 1 or workers < 1 or attempts < 1 or transient_403_retries < 0:
+    if limit < 0 or batch_size < 1 or request_size < 1 or workers < 1 or attempts < 1 or transient_403_retries < 0:
         raise ValueError("invalid embedding budget")
     report = {"attempted": 0, "embedded": 0, "failed": 0, "model_calls": 0,
-              "model": MODEL, "dimensions": DIMENSIONS}
+              "provider": spec.provider, "model": spec.model, "dimensions": spec.dims, "field": spec.field}
     stop = Event()
 
-    def one(post):
+    def failure_for(exc):
+        code = provider_status(exc)
+        category = getattr(exc, "category", None)
+        # The spending cap is final: no retry, no split, stop the whole job.
+        budget_stop = category in ("budget", "budget_ledger_unreadable")
+        return {"code": code, "error_type": type(exc).__name__,
+                "diagnostics": {"category": category} if budget_stop else provider_diagnostics(exc),
+                "fatal": budget_stop or (code is not None and 400 <= code < 500
+                                         and code not in {408, 409, 425, 429} | _SPLIT_CODES)}
+
+    def request(posts):
+        """Returns (results, calls) where results pairs each post with (vector or None, failure or None)."""
         calls, retries_403, transient_failures = 0, 0, 0
         while True:
             if stop.is_set():
-                return post, None, None, calls
+                return [(post, None, None) for post in posts], calls
             try:
                 calls += 1
-                vector = list(embed_one(post["text"]))
-                if not valid_embedding(vector):
+                vectors = [list(v) for v in embed_batch([post["text"] for post in posts])]
+                if len(vectors) != len(posts) or not all(valid_embedding(v, spec.dims) for v in vectors):
                     raise ValueError("invalid vector")
-                norm = math.sqrt(sum(v * v for v in vector))
-                return post, [v / norm for v in vector], None, calls
+                return [(post, [x / math.sqrt(sum(y * y for y in v)) for x in v], None)
+                        for post, v in zip(posts, vectors)], calls
             except Exception as exc:
-                code = provider_status(exc)
-                failure = {"code": code, "error_type": type(exc).__name__, "diagnostics": provider_diagnostics(exc),
-                           "fatal": code is not None and 400 <= code < 500 and code not in (408, 409, 429)}
-                # Explicit opt-in only: 403 normally indicates a permanent client
-                # error. This budget is for a measured intermittent provider issue.
+                failure = failure_for(exc)
+                code = failure["code"]
+                if code in _SPLIT_CODES:
+                    if len(posts) == 1:
+                        return [(posts[0], None, failure)], calls
+                    results = []
+                    for post in posts:
+                        part, used = request([post])
+                        results.extend(part)
+                        calls += used
+                    return results, calls
+                # Explicit opt-in only: 403 normally indicates a permanent client error.
                 if code == 403 and retries_403 < transient_403_retries:
                     retries_403 += 1
                     sleep(2 ** retries_403)
                     continue
                 if failure["fatal"]:
                     stop.set()
-                    return post, None, failure, calls
+                    return [(post, None, failure) for post in posts], calls
                 transient_failures += 1
                 if transient_failures >= attempts:
-                    return post, None, failure, calls
-                sleep(2 ** transient_failures)
+                    return [(post, None, failure) for post in posts], calls
+                hint = getattr(exc, "retry_after", None)
+                sleep(min(max_backoff, hint if isinstance(hint, (int, float)) and hint >= 0
+                          else 2 ** transient_failures))
 
-    cursor = collection.find(PENDING, {"uri": 1, "text": 1}).sort("uri", 1).limit(limit)
+    cursor = collection.find(PENDING if spec is SPEC else provider.pending_filter(spec),
+                             {"uri": 1, "text": 1}).sort("uri", 1).limit(limit)
     batch = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
         def process(rows):
-            iterator, pending, fatal = iter(rows), set(), None
-            writes = []
+            chunks = iter([rows[i:i + request_size] for i in range(0, len(rows), request_size)])
+            pending, fatal, writes = set(), None, []
 
             def schedule():
                 while len(pending) < workers and not stop.is_set():
-                    post = next(iterator, None)
-                    if post is None:
+                    chunk = next(chunks, None)
+                    if chunk is None:
                         break
-                    pending.add(pool.submit(one, post))
+                    pending.add(pool.submit(request, chunk))
 
             schedule()
             while pending:
                 done, pending = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:
-                    post, vector, failure, calls = future.result()
+                    results, calls = future.result()
                     report["model_calls"] += calls
-                    if calls:
-                        report["attempted"] += 1
-                    if failure and failure["fatal"]:
-                        fatal = failure
-                    if vector is None:
-                        report["failed"] += bool(calls)
-                        continue
-                    writes.append(({"uri": post["uri"]}, {"$set": {
-                        "embedding": vector, "embedding_model": MODEL,
-                        "embedded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    }}))
+                    for post, vector, failure in results:
+                        if calls:
+                            report["attempted"] += 1
+                        if failure and failure["fatal"]:
+                            fatal = failure
+                        if vector is None:
+                            report["failed"] += bool(calls)
+                            continue
+                        fields = {spec.field: vector, "embedding_model": spec.model, "dims": spec.dims,
+                                  "embedded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}
+                        if spec.provider == "gemini":
+                            # embedding_model and dims describe embedding_vultr; Gemini provenance is its field.
+                            fields = {spec.field: vector, "embedded_at": fields["embedded_at"]}
+                        writes.append(({"uri": post["uri"]}, {"$set": fields}))
                 schedule()
             if writes:
                 bulk_write = getattr(collection, "bulk_write", None)
@@ -238,32 +276,45 @@ def embed_posts(collection, embed_one, *, limit=1000, batch_size=32, workers=4,
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--limit", type=int, default=1000)
-    parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--workers", type=int, default=4, help="parallel provider requests")
+    parser.add_argument("--request-size", type=int, default=None,
+                        help="posts per provider request (Vultr default 32; Gemini is always 1)")
+    parser.add_argument("--batch-size", type=int, default=256, help="posts per bulk database write")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--create-index", action="store_true")
     parser.add_argument("--index-only", action="store_true")
     parser.add_argument("--transient-403-retries", type=int, default=0,
-                        help="Explicit opt-in for measured intermittent 403s; retries per post, default 0")
+                        help="Explicit opt-in for measured intermittent 403s; retries per request, default 0")
     args = parser.parse_args()
-    if args.limit < 0 or args.workers < 1 or args.batch_size < 1 or args.transient_403_retries < 0:
-        parser.error("limit must be nonnegative, workers and batch-size positive")
+    request_size = 1 if SPEC.provider == "gemini" else (args.request_size or 32)
+    if args.limit < 0 or args.workers < 1 or args.batch_size < 1 or request_size < 1 or args.transient_403_retries < 0:
+        parser.error("limit must be nonnegative; workers, batch-size and request-size positive")
     from backend.db import db
     posts = db["social_posts"]
     report = {"pending": posts.count_documents(PENDING), "limit": args.limit}
-    report.update(planned_posts=min(report["pending"], args.limit),
-                  model=MODEL, dimensions=DIMENSIONS,
+    planned = min(report["pending"], args.limit)
+    report.update(planned_posts=planned, provider=SPEC.provider, model=MODEL, dimensions=DIMENSIONS,
+                  field=FIELD, index=INDEX_NAME, request_size=request_size, workers=args.workers,
                   transient_403_retries=args.transient_403_retries,
-                  maximum_model_calls=min(report["pending"], args.limit) * (4 + args.transient_403_retries))
+                  maximum_model_calls=math.ceil(planned / request_size) * (4 + args.transient_403_retries)
+                  + (planned if request_size > 1 else 0))
+    report["vultr_budget"] = provider.usage_report() if SPEC.provider == "vultr" else None
     if args.dry_run:
         print(json.dumps(report))
         return
     if not args.index_only:
-        from backend.services.embeddings import embed_text
-        report.update(embed_posts(posts, embed_text, limit=args.limit,
-                                  workers=args.workers, batch_size=args.batch_size,
-                                  transient_403_retries=args.transient_403_retries,
-                                  on_progress=lambda progress: print(json.dumps({"status": "progress", **progress}), flush=True)))
+        started = time.monotonic()
+        report.update(embed_posts(
+            posts, lambda texts: provider.embed_texts(texts, attempts=1), limit=args.limit,
+            workers=args.workers, batch_size=args.batch_size, request_size=request_size,
+            transient_403_retries=args.transient_403_retries,
+            on_progress=lambda progress: print(json.dumps({
+                "status": "progress", "elapsed_s": round(time.monotonic() - started, 1), **progress}), flush=True)))
+        elapsed = time.monotonic() - started
+        report.update(elapsed_s=round(elapsed, 2),
+                      embeddings_per_second=round(report["embedded"] / elapsed, 2) if elapsed else None)
+    if SPEC.provider == "vultr":
+        report["vultr_budget"] = provider.usage_report()
     if args.create_index or args.index_only:
         report["index_ready"] = ensure_vector_index(posts)
     print(json.dumps(report))

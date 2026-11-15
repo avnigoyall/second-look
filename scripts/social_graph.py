@@ -18,6 +18,8 @@ import networkx as nx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from backend.services.social_embeddings import spec as embedding_spec, stored_vector  # noqa: E402
+
 SEED = 42
 WEIGHTS = {"reply": 1.0, "quote": 0.8, "mention": 0.5, "similarity": 0.2}
 MAX_NODES = 1500
@@ -68,16 +70,18 @@ def interaction_graph(posts):
     return graph
 
 
-def neighbor_pipeline(post, k=10):
+def neighbor_pipeline(post, k=10, spec=None):
     # k + 1 allows the indexed source post to be removed after retrieval.
-    return [{"$vectorSearch": {"index": "social_posts_vector", "path": "embedding",
-                              "queryVector": post["embedding"], "numCandidates": max(220, (k + 1) * 20),
+    # Query vector, field and index always come from the same provider spec.
+    spec = spec or embedding_spec()
+    return [{"$vectorSearch": {"index": spec.index, "path": spec.field,
+                              "queryVector": stored_vector(post, spec), "numCandidates": max(220, (k + 1) * 20),
                               "limit": k + 1}},
             {"$project": {"_id": 0, "uri": 1, "author_hash": 1,
                           "score": {"$meta": "vectorSearchScore"}}}]
 
 
-def add_similarity(graph, posts, retrieve, k=10, *, workers=8):
+def add_similarity(graph, posts, retrieve, k=10, *, workers=8, spec=None):
     """Query each post, use ten post neighbors, and collapse each author pair once.
 
     Similarity edges do not accumulate with repeated near-duplicate posts. This
@@ -85,16 +89,17 @@ def add_similarity(graph, posts, retrieve, k=10, *, workers=8):
     """
     if workers < 1:
         raise ValueError("neighbor worker count must be positive")
+    spec = spec or embedding_spec()
     enriched = graph.copy()
     pairs = set()
     queries = 0
     eligible = iter(post for post in sorted(posts, key=lambda p: p.get("uri", ""))
-                    if post.get("author_hash") and len(post.get("embedding") or []) == 768)
+                    if post.get("author_hash") and stored_vector(post, spec) is not None)
 
     def one(post):
         # Materialize the Atlas cursor inside the worker, so network reads are
         # concurrent too. Only the main thread mutates the resulting graph.
-        return post, list(retrieve(neighbor_pipeline(post, k)))
+        return post, list(retrieve(neighbor_pipeline(post, k, spec)))
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         pending = set()
@@ -329,16 +334,17 @@ def main():
     count = db["social_posts"].count_documents({})
     if count < 3000 and not args.allow_small_corpus:
         parser.error(f"Only {count} posts. Await user approval before --allow-small-corpus.")
+    spec = embedding_spec()
     projection = {"_id": 0, "uri": 1, "author_hash": 1, "reply_parent_author_hash": 1,
-                  "quote_author_hash": 1, "mention_author_hashes": 1, "embedding": 1,
+                  "quote_author_hash": 1, "mention_author_hashes": 1, spec.field: 1, "embedding_model": 1, "dims": 1,
                   "text": 1, "term": 1, "terms": 1, "like_count": 1}
     posts = list(db["social_posts"].find({}, projection))
-    if not args.interaction_only and not any(len(post.get("embedding") or []) == 768 for post in posts):
+    if not args.interaction_only and not any(stored_vector(post, spec) is not None for post in posts):
         parser.error("No social embeddings are available. Embed posts first, or explicitly use --interaction-only.")
     base = interaction_graph(posts)
     interaction_stats = graph_stats(base)
     graph, queries = (base, 0) if args.interaction_only else add_similarity(
-        base, posts, db["social_posts"].aggregate, workers=args.neighbor_workers)
+        base, posts, db["social_posts"].aggregate, workers=args.neighbor_workers, spec=spec)
     groups = communities(graph)
     summaries = community_summaries(groups, posts)
     cached_names = load_name_cache(db["social_graph_meta"], groups)
@@ -354,7 +360,9 @@ def main():
                              "named_community_count": named_count,
                              "fallback_community_count": len(groups) - named_count,
                              "corpus_posts": len(posts),
-                             "embedded_posts": sum(len(p.get("embedding") or []) == 768 for p in posts),
+                             "embedded_posts": sum(stored_vector(p, spec) is not None for p in posts),
+                             "embedding_provider": spec.provider, "embedding_model": spec.model,
+                             "embedding_dims": spec.dims, "vector_index": spec.index,
                              "similarity_enabled": not args.interaction_only,
                              "neighbor_workers": args.neighbor_workers})
     args.output.parent.mkdir(parents=True, exist_ok=True)

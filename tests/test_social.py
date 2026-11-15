@@ -324,11 +324,14 @@ class MetricsTests(unittest.TestCase):
 class RetrievalTests(unittest.TestCase):
     def setUp(self):
         s.clear_cache()
+        provider_env = mock.patch.dict(os.environ, {"SOCIAL_EMBED_PROVIDER": "vultr"})
+        provider_env.start()
+        self.addCleanup(provider_env.stop)
 
     def test_vector_search_uses_atlas_and_converts_cosine_score(self):
         collection = mock.Mock()
         collection.aggregate.return_value = [{"uri": post(1)["uri"], "atlas_score": .85}]
-        rows = s.vector_search_posts([1.0] + [0.0] * 767, collection=collection, term="cargo pants",
+        rows = s.vector_search_posts([1.0] + [0.0] * 1023, collection=collection, term="cargo pants",
                                      since=START, until=START + timedelta(weeks=1))
         self.assertAlmostEqual(rows[0]["similarity"], .7)
         pipeline = collection.aggregate.call_args.args[0]
@@ -336,11 +339,28 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(stage["limit"], 30)
         self.assertEqual(stage["filter"], {"term": "cargo pants", "created_at": {
             "$gte": s.iso(START), "$lt": s.iso(START + timedelta(weeks=1))}})
-        self.assertEqual(stage["index"], "social_posts_vector")
+        self.assertEqual((stage["index"], stage["path"]), ("social_posts_vultr_vector", "embedding_vultr"))
         self.assertNotIn("embedding", pipeline[1]["$project"])
+        self.assertNotIn("embedding_vultr", pipeline[1]["$project"])
+
+    def test_query_vectors_are_cached_per_provider_and_failures_are_not(self):
+        from backend.services import social_embeddings as provider
+        calls = []
+        def fake(text, timeout):
+            calls.append(text)
+            if text == "bad":
+                raise provider.SocialEmbeddingError("timeout")
+            return [0.5] * 1024
+        with mock.patch.object(provider, "embed_query", side_effect=fake):
+            self.assertEqual(s.embed_query("barrel jeans"), [0.5] * 1024)
+            self.assertEqual(s.embed_query("barrel jeans"), [0.5] * 1024)
+            for _ in range(2):
+                with self.assertRaises(provider.SocialEmbeddingError):
+                    s.embed_query("bad")
+        self.assertEqual(calls, ["barrel jeans", "bad", "bad"])
 
     def test_bad_vectors_fail_without_database_call(self):
-        for vector in ([0.0], [float("nan")] * 768):
+        for vector in ([0.0], [1.0] * 768, [float("nan")] * 1024):
             with self.assertRaises(ValueError):
                 s.vector_search_posts(vector)
 
@@ -354,7 +374,7 @@ class RetrievalTests(unittest.TestCase):
         self.assertLess(fraction, following)
         collection = mock.Mock()
         collection.aggregate.return_value = []
-        s.vector_search_posts([1.0] + [0.0] * 767, collection=collection,
+        s.vector_search_posts([1.0] + [0.0] * 1023, collection=collection,
                               since="2026-01-05T00:00:00Z", until="2026-01-05T00:00:00.123Z")
         filters = collection.aggregate.call_args.args[0][0]["$vectorSearch"]["filter"]["created_at"]
         self.assertEqual(filters, {"$gte": exact, "$lt": fraction})

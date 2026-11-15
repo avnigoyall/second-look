@@ -4,7 +4,7 @@ Bluesky Radar adds sampled clothing chatter to purchase analysis. It preserves t
 
 ## Setup
 
-Run commands from the repository root on feat/social-radar. Keep the current local .env file private. The required configuration is MONGODB_URI, GEMINI_API_KEY, ANTHROPIC_API_KEY and CLAUDE_MODEL. The ingest script creates SOCIAL_HASH_SALT if it is missing. Preserve that salt across resumptions. STORE_TEXT defaults true. SOCIAL_RADAR_ENABLED defaults false until the pipeline is ready.
+Run commands from the repository root on feat/social-radar. Keep the current local .env file private. The required configuration is MONGODB_URI, ANTHROPIC_API_KEY, CLAUDE_MODEL and the Vultr variables VULTR_API_KEY, VULTR_BASE_URL and VULTR_EMBED_MODEL (they may live in the git-ignored backend/.env). SOCIAL_EMBED_PROVIDER selects the Social embedder: vultr (default) or gemini, which needs GEMINI_API_KEY. The ingest script creates SOCIAL_HASH_SALT if it is missing. Preserve that salt across resumptions. STORE_TEXT defaults true. SOCIAL_RADAR_ENABLED defaults false until the pipeline is ready.
 
 ```sh
 .venv/bin/python -m pip install -r backend/requirements.txt
@@ -44,14 +44,14 @@ New ingestion uses six fractional digits and UTC Z on every stored timestamp. Th
 
 ```sh
 .venv/bin/python scripts/social_embed.py --dry-run
-.venv/bin/python scripts/social_embed.py --limit 35000 --workers 2 --create-index
+.venv/bin/python scripts/social_embed.py --limit 35000 --workers 16 --request-size 8 --create-index
 .venv/bin/python scripts/social_graph.py --name-limit 50
 .venv/bin/python scripts/social_metrics.py --calibrate
 .venv/bin/python scripts/eval_social.py --prepare-only
 .venv/bin/python scripts/eval_social.py
 ```
 
-Embedding makes one model request per post, with bounded concurrent calls and resumable writes. Repeating the command skips successful embeddings. The vector index uses 768 dimensions and filters term and created_at. Index creation can fail if Atlas has no search index capacity; the script never deletes another index.
+With Vultr, each request carries a list of posts (--request-size) and --workers requests run in parallel. The model is qwen3-embedding-4b with dimensions=1024; native output is 2560. Vectors go to embedding_vultr with embedding_model and dims, and the index is social_posts_vultr_vector. Old Gemini vectors stay in embedding with the social_posts_vector index. Query embedding, retrieval, graph neighbors and evaluation all use the same provider, so models are never mixed. Transient errors back off exponentially and honor Retry-After. HTTP 401, 402 and 403 stop the job. A rejected request (400, 413 or 422) is split into single posts so one bad text does not stop the corpus. Writes are resumable: repeating the command skips posts that already have a vector for the current provider, model and dims. Both indexes filter term and created_at. Index creation can fail if Atlas has no search index capacity; the script never deletes another index.
 
 Graph edges distinguish observed interactions from inferred semantic similarity. Communities are estimates, not Bluesky-provided groups. The export contains at most 1500 authors and 15000 edges. Community naming is cached and bounded by --name-limit. Read docs/social_graph.md for graph interpretation.
 

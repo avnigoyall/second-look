@@ -6,16 +6,27 @@ from unittest.mock import Mock, patch
 
 import networkx as nx
 
+from backend.services import social_embeddings as provider
 from scripts import social_graph as graph
+
+SPEC = provider.spec("vultr")
 
 
 def post(uri, author, **fields):
     return {"uri": uri, "author_hash": author, "term": "cargo pants", **fields}
 
 
+def vec(value, spec=SPEC):
+    """Provider-tagged stored vector, as the Vultr embedding job writes it."""
+    fields = {spec.field: [value] * spec.dims}
+    if spec.provider == "vultr":
+        fields.update(embedding_model=spec.model, dims=spec.dims)
+    return fields
+
+
 class GraphTests(unittest.TestCase):
     def test_neighbor_queries_are_bounded_concurrent_and_results_stable(self):
-        posts = [post(str(i), "a" + str(i), embedding=[float(i)] * 768) for i in range(12)]
+        posts = [post(str(i), "a" + str(i), **vec(float(i))) for i in range(12)]
         base = graph.interaction_graph(posts)
         lock, barrier = Lock(), Barrier(3)
         active = peak = calls = 0
@@ -38,24 +49,24 @@ class GraphTests(unittest.TestCase):
                     with lock:
                         active -= 1
             return cursor()
-        parallel, count = graph.add_similarity(base, posts, retrieve, workers=3)
+        parallel, count = graph.add_similarity(base, posts, retrieve, workers=3, spec=SPEC)
         self.assertEqual(count, 12)
         self.assertEqual(calls, 12)
         self.assertEqual(peak, 3)
         def serial_retrieve(pipeline):
             index = int(pipeline[0]["$vectorSearch"]["queryVector"][0])
             return [{"uri": str((index + 1) % 12), "author_hash": "a" + str((index + 1) % 12)}]
-        serial, serial_count = graph.add_similarity(base, list(reversed(posts)), serial_retrieve, workers=1)
+        serial, serial_count = graph.add_similarity(base, list(reversed(posts)), serial_retrieve, workers=1, spec=SPEC)
         self.assertEqual(serial_count, 12)
         self.assertEqual(list(parallel.edges(data=True)), list(serial.edges(data=True)))
         self.assertEqual(graph.communities(parallel), graph.communities(serial))
 
     def test_failed_neighbor_query_aborts_without_mutating_source(self):
-        posts = [post(str(i), "a" + str(i), embedding=[float(i)] * 768) for i in range(20)]
+        posts = [post(str(i), "a" + str(i), **vec(float(i))) for i in range(20)]
         base = graph.interaction_graph(posts)
         retrieve = Mock(side_effect=RuntimeError("safe fake failure"))
         with self.assertRaises(RuntimeError):
-            graph.add_similarity(base, posts, retrieve, workers=3)
+            graph.add_similarity(base, posts, retrieve, workers=3, spec=SPEC)
         self.assertLessEqual(retrieve.call_count, 3)
         self.assertEqual(base.number_of_edges(), 0)
 
@@ -94,14 +105,14 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph.graph_stats(result)["largest_component_share"], 0.8)
 
     def test_similarity_uses_vector_search_ten_neighbors_and_pair_weight_cap(self):
-        posts = [post("1", "a", embedding=[0.1] * 768), post("2", "a", embedding=[0.1] * 768)]
+        posts = [post("1", "a", **vec(0.1)), post("2", "a", **vec(0.1))]
         base = graph.interaction_graph(posts + [post("3", "z")])
         calls = []
         def retrieve(pipeline):
             calls.append(pipeline)
             return [{"uri": "1", "author_hash": "a"}] + [
                 {"uri": str(i + 10), "author_hash": "z"} for i in range(20)]
-        result, queries = graph.add_similarity(base, posts, retrieve)
+        result, queries = graph.add_similarity(base, posts, retrieve, spec=SPEC)
         self.assertEqual(queries, 2)
         self.assertEqual(len(calls), 2)
         self.assertEqual(result.number_of_edges(), 1)
@@ -109,9 +120,25 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(edge, {"type": "similarity", "kind": "similarity", "weight": 0.2})
         for pipeline in calls:
             self.assertEqual(pipeline[0]["$vectorSearch"]["limit"], 11)
-            self.assertEqual(pipeline[0]["$vectorSearch"]["index"], "social_posts_vector")
+            self.assertEqual(pipeline[0]["$vectorSearch"]["index"], "social_posts_vultr_vector")
+            self.assertEqual(pipeline[0]["$vectorSearch"]["path"], "embedding_vultr")
+            self.assertEqual(len(pipeline[0]["$vectorSearch"]["queryVector"]), 1024)
         self.assertEqual(graph.graph_stats(base)["isolated_authors"], 2)
         self.assertEqual(graph.graph_stats(result)["isolated_authors"], 0)
+
+    def test_similarity_never_mixes_providers_or_mismatched_vectors(self):
+        gemini = provider.spec("gemini")
+        stale = {**vec(0.1), "embedding_model": "other-model"}
+        posts = [post("1", "a", embedding=[0.1] * 768, embedding_model="gemini-embedding-2"),
+                 post("2", "b", **stale), post("3", "c", **{**vec(0.1), "dims": 2560})]
+        retrieve = Mock(return_value=[])
+        _, queries = graph.add_similarity(graph.interaction_graph(posts), posts, retrieve, spec=SPEC)
+        self.assertEqual(queries, 0)
+        _, queries = graph.add_similarity(graph.interaction_graph(posts), posts, retrieve, spec=gemini)
+        self.assertEqual(queries, 1)
+        stage = retrieve.call_args.args[0][0]["$vectorSearch"]
+        self.assertEqual((stage["index"], stage["path"], len(stage["queryVector"])),
+                         ("social_posts_vector", "embedding", 768))
 
     def test_partition_repeatable_with_reordered_inputs(self):
         source = nx.karate_club_graph()

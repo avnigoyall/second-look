@@ -12,7 +12,7 @@ import os
 import re
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter, OrderedDict, defaultdict
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -23,7 +23,6 @@ from pymongo import timeout as mongo_timeout
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config" / "social_momentum.json"
-VECTOR_INDEX = "social_posts_vector"
 _HANDLE = re.compile(r"(?<!\w)@[\w.-]+|\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b", re.I)
 _URL = re.compile(r"(?:https?://|at://)\S+", re.I)
 _RUNTIME_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="social-context")
@@ -32,6 +31,8 @@ _CACHE_LOCK = threading.Lock()
 _CACHE: dict[str, tuple[float, dict | None]] = {}
 _INFLIGHT: dict[str, object] = {}
 MAX_CACHE_ITEMS = 512
+MAX_VECTOR_CACHE_ITEMS = 2048
+_VECTOR_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()
 
 
 def momentum_config() -> dict:
@@ -383,9 +384,14 @@ def collections():
 
 def vector_search_posts(vector, *, limit=30, term=None, since=None, until=None, collection=None,
                         timeout_ms=700) -> list[dict]:
-    """Top-k Atlas retrieval shared with Ask and evaluation. Scores are plain cosine."""
-    if len(vector) != 768 or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in vector):
-        raise ValueError("a finite 768-dimensional embedding is required")
+    """Top-k Atlas retrieval shared with Ask and evaluation. Scores are plain cosine.
+
+    Field, index and dimensions come from the same SOCIAL_EMBED_PROVIDER spec as embed_query.
+    """
+    from backend.services.social_embeddings import spec as embedding_spec
+    spec = embedding_spec()
+    if len(vector) != spec.dims or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in vector):
+        raise ValueError(f"a finite {spec.dims}-dimensional embedding is required")
     limit = max(1, min(int(limit), 100))
     filters = {}
     if term:
@@ -396,7 +402,7 @@ def vector_search_posts(vector, *, limit=30, term=None, since=None, until=None, 
             filters["created_at"]["$gte"] = iso(utc(since))
         if until is not None:
             filters["created_at"]["$lt"] = iso(utc(until))
-    stage = {"index": VECTOR_INDEX, "path": "embedding", "queryVector": list(vector),
+    stage = {"index": spec.index, "path": spec.field, "queryVector": list(vector),
              "numCandidates": max(100, 20 * limit), "limit": limit}
     if filters:
         stage["filter"] = filters
@@ -410,9 +416,29 @@ def vector_search_posts(vector, *, limit=30, term=None, since=None, until=None, 
             for row in rows]
 
 
-def embed_query(text: str):
-    from backend.services.embeddings import embed_text
-    return embed_text(text)
+def embed_query(text: str, timeout: float = 3.0):
+    """Query vector from the Social provider (Vultr by default), never the closet embedder.
+
+    The runtime caller enforces its own sub-0.5 s deadline. The HTTP timeout here is longer
+    so a slow first lookup can still finish in the background and fill the caches.
+    """
+    from backend.services.social_embeddings import embed_query as provider_embed_query, spec
+    s = spec()
+    key = (s.provider, s.model, s.dims, text)
+    with _CACHE_LOCK:
+        vector = _VECTOR_CACHE.get(key)
+        if vector is not None:
+            _VECTOR_CACHE.move_to_end(key)
+            return list(vector)
+    vector = provider_embed_query(text, timeout=timeout)
+    with _CACHE_LOCK:
+        # A query vector never goes stale for the same provider, model and dims, so this
+        # cache outlives the ten-minute trend cache. Measured Vultr p50 is about 1.3 s;
+        # a repeat lookup then costs only Atlas retrieval. Failures are never cached.
+        _VECTOR_CACHE[key] = tuple(vector)
+        while len(_VECTOR_CACHE) > MAX_VECTOR_CACHE_ITEMS:
+            _VECTOR_CACHE.popitem(last=False)
+    return vector
 
 
 def item_query(item) -> str:
@@ -470,6 +496,7 @@ def clear_cache():
     with _CACHE_LOCK:
         _CACHE.clear()
         _INFLIGHT.clear()
+        _VECTOR_CACHE.clear()
 
 
 def _finish_lookup(query, cfg, future):

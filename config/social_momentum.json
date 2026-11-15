@@ -12,7 +12,7 @@
   "minimum_similarity": 0.45,
   "minimum_vote_share": 0.4,
   "cache_seconds": 600,
-  "lookup_timeout_seconds": 0.9,
+  "lookup_timeout_seconds": 0.45,
   "calibration": {
     "status": "provisional",
     "note": "Initial thresholds are not calibrated. Run social_metrics.py --calibrate after collection. Labels are used only for threshold evaluation, never as per-item classifier inputs."
