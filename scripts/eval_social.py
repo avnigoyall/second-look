@@ -26,6 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from backend.services import social  # noqa: E402
 
+# Offline quality measurement: a slow provider call is still a successful lookup and its full
+# latency is reported. Runtime /analyze keeps its own sub-0.5 s deadline.
+EVAL_EMBED_TIMEOUT_SECONDS = 10.0
+
 
 def percentile(values, q):
     if not values:
@@ -192,12 +196,26 @@ def prepared_queries(posts, path, size=30, *, generate=None):
     return queries
 
 
-def press_graph_comparison(seed_rows, metrics, posts):
-    """Join only user-supplied press annotations to measured graph/sample fields."""
+def press_agreement(press_status, momentum):
+    """Strict comparison: rising matches rising, fading matches fading. unknown is not comparable."""
+    if momentum in (None, "unknown"):
+        return "not_comparable"
+    return "agree" if str(press_status).strip().lower() == momentum else "disagree"
+
+
+def press_graph_comparison(seed_rows, metrics, posts, config=None):
+    """Join only user-supplied press annotations to measured graph/sample fields.
+
+    press_status is read here for evaluation only. It never reaches classify_momentum,
+    and the recent-eight-week preview is the read-only proposal, not published momentum.
+    """
     by_term = {m["term"]: m for m in metrics if m.get("term")}
+    preview_metrics = [m for m in metrics if m.get("term") and m.get("weekly_counts")]
+    preview = {row["term"]: row for row in social.preview_recent_momentum(preview_metrics, config)["terms"]} \
+        if preview_metrics else {}
     counts = defaultdict(set)
     for post in posts:
-        if post.get("source") == "thread" or not post.get("uri"):
+        if post.get("source") == "thread" or post.get("synthetic") or not post.get("uri"):
             continue
         for term in social.terms_for(post):
             counts[term].add(post["uri"])
@@ -206,20 +224,66 @@ def press_graph_comparison(seed_rows, metrics, posts):
         if not isinstance(seed, dict) or not seed.get("term") or "press_status" not in seed:
             continue
         term, row = seed["term"], by_term.get(seed["term"], {})
+        recent = preview.get(term, {})
         metadata = {key: value for key, value in seed.items() if key != "press_status"
                     and any(part in key.lower() for part in ("press", "source", "date", "published", "url"))}
+        momentum = row.get("momentum")
+        proposed = recent.get("proposed_recent_momentum")
         rows.append({"term": term, "press_status": seed["press_status"],
                      "sample_posts": row.get("post_count", len(counts[term])),
                      "breadth": row.get("breadth"), "concentration": row.get("concentration"),
-                     "momentum": row.get("momentum"), "confidence": row.get("confidence"),
+                     "momentum": momentum, "confidence": row.get("confidence"),
+                     "agreement": press_agreement(seed["press_status"], momentum),
+                     "preview_momentum": proposed, "preview_confidence": recent.get("proposed_confidence"),
+                     "preview_sample_posts": recent.get("recent_sample_posts"),
+                     "preview_agreement": press_agreement(seed["press_status"], proposed),
+                     "saturated_week_share": row.get("saturated_week_share"),
                      "coverage_note": row.get("coverage_note", "Graph/sample metrics have not been computed for this term."),
                      "press_metadata": metadata})
-    return {"expected_seed_rows": 10, "provided_seed_rows": len(rows), "rows": rows,
-            "status": "provided" if len(rows) == 10 else "awaiting_seed_rows",
-            "note": ("Ten user-supplied press annotations are shown; this comparison is not an independent accuracy score."
-                     if len(rows) == 10 else
-                     f"Awaiting the requested 10 user-supplied press_status seed rows; {len(rows)} are present. "
-                     "No missing terms, press statuses, sources or dates have been invented.")}
+    summary = {key: Counter(r[key] for r in rows) for key in ("agreement", "preview_agreement")}
+    low = [r["term"] for r in rows if (r["sample_posts"] or 0) < 100]
+    status = "provided" if len(rows) == 10 else "awaiting_seed_rows"
+    if len(rows) == 10:
+        note = ("Ten user-supplied press annotations are compared with real_only sample metrics. "
+                "This is a sanity check against press opinion, not an independent accuracy score. "
+                f"Published momentum: {summary['agreement']['agree']} agree, {summary['agreement']['disagree']} disagree, "
+                f"{summary['agreement']['not_comparable']} not comparable (unknown). "
+                f"Recent eight-week preview (read-only, not published): {summary['preview_agreement']['agree']} agree, "
+                f"{summary['preview_agreement']['disagree']} disagree, "
+                f"{summary['preview_agreement']['not_comparable']} not comparable.")
+        if low:
+            note += (f" Fewer than 100 real sample posts, so confidence is low by rule: {', '.join(low)}.")
+    else:
+        note = (f"Awaiting the requested 10 user-supplied press_status seed rows; {len(rows)} are present. "
+                "No missing terms, press statuses, sources or dates have been invented.")
+    return {"expected_seed_rows": 10, "provided_seed_rows": len(rows), "rows": rows, "status": status,
+            "agreement_counts": {k: dict(v) for k, v in summary.items()}, "low_sample_terms": low, "note": note}
+
+
+def coverage_limits(metrics, press):
+    """Plain statements derived from measured fields only."""
+    out = []
+    if metrics:
+        unknown = sum(m.get("momentum", "unknown") == "unknown" for m in metrics)
+        complete = sum(bool(m.get("query_coverage_complete")) for m in metrics)
+        out.append(f"Published momentum is unknown for {unknown} of {len(metrics)} terms. {complete} terms have "
+                   "complete query coverage; the strict policy withholds momentum, decay and confidence above low "
+                   "when any week is unvisited, truncated or saturated.")
+        capped = sorted(m["term"] for m in metrics if (m.get("saturated_week_share") or 0) > 0.25)
+        if capped:
+            out.append(f"More than 25 percent of weeks hit the 20-post first-page cap for {len(capped)} terms "
+                       f"({', '.join(capped)}). Their weekly counts are lower bounds and cannot show growth.")
+        small = sorted(m["term"] for m in metrics if m.get("post_count", 0) < 100)
+        if small:
+            out.append(f"Fewer than 100 real posts (confidence low by rule) for {len(small)} terms: {', '.join(small)}.")
+    rows = press.get("rows") or []
+    if rows:
+        thin = [r["term"] for r in rows if (r.get("preview_sample_posts") or 0) < 20]
+        seen = sorted({str(r.get("preview_momentum")) for r in rows})
+        out.append("The eight-week preview is read-only and low confidence. Across press terms it reads: "
+                   f"{', '.join(seen)}. With sampled lower-bound counts it cannot confirm or refute press opinion. "
+                   + (f"Too few recent posts to compare: {', '.join(thin)}." if thin else ""))
+    return out
 
 
 def report_markdown(result):
@@ -230,7 +294,12 @@ def report_markdown(result):
         return "unmeasured" if value is None else f"{value:.4f}" if isinstance(value, float) else str(value)
     lines = ["# Social Radar evaluation", "", f"Status: {result.get('status', 'unmeasured')}.", "",
              f"Generated at: {result.get('generated_at', 'unknown')}.", "",
-             "| Measurement | Result |", "| --- | --- |",
+             f"Scope: {result.get('scope', 'real_only')}. Synthetic posts excluded: "
+             f"{fmt(result.get('synthetic_posts_excluded', 0))}. Embedding: "
+             + (f"{result['embedding']['provider']} {result['embedding']['model']}, {result['embedding']['dims']} dims, "
+                f"index {result['embedding']['index']}." if result.get("embedding") else "unrecorded.") + "",
+             "",
+             "| Measurement | real_only |", "| --- | --- |",
              f"| Corpus posts | {fmt(result.get('corpus_posts'))} |",
              f"| Embedded posts | {fmt(result.get('embedded_posts'))} |",
              f"| Prepared Claude queries | {fmt(result.get('prepared_queries'))} |",
@@ -268,6 +337,9 @@ def report_markdown(result):
     if result.get("reason"):
         lines.extend([f"Unverified: {result['reason']}", ""])
     comparison = result.get("press_graph", {})
+    limits = result.get("coverage_limits") or []
+    if limits:
+        lines.extend(["## Where coverage or counts are too low", ""] + [f"- {item}" for item in limits] + [""])
     lines.extend(["## Press versus graph comparison", "",
                   comparison.get("note", "Awaiting the requested 10 user-supplied press_status seed rows. "
                                  "No press comparison table is complete."), ""])
@@ -275,13 +347,16 @@ def report_markdown(result):
         def cell(value):
             if value is None:
                 return "unmeasured"
-            text = json.dumps(value, ensure_ascii=True, sort_keys=True) if isinstance(value, (dict, list)) else str(value)
+            text = (json.dumps(value, ensure_ascii=True, sort_keys=True) if isinstance(value, (dict, list))
+                    else f"{value:.3f}" if isinstance(value, float) else str(value))
             return text.replace("|", "\\|").replace("\n", " ").replace("\r", " ").replace(chr(0x2014), "-")
-        lines.extend(["| Term | press_status | Sample posts | Breadth | Concentration | Momentum | Confidence | Coverage note | Press source/date |",
-                      "| --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |"])
+        lines.extend(["| Term | press_status | Sample posts (real_only) | Breadth | Concentration | Published momentum | Confidence | Agreement | Preview momentum (8 wk) | Preview posts | Preview confidence | Preview agreement | Saturated week share | Coverage note | Press source/date |",
+                      "| --- | --- | ---: | ---: | ---: | --- | --- | --- | --- | ---: | --- | --- | ---: | --- | --- |"])
         for row in comparison["rows"]:
             values = [row.get(key) for key in ("term", "press_status", "sample_posts", "breadth", "concentration",
-                                              "momentum", "confidence", "coverage_note")]
+                                              "momentum", "confidence", "agreement", "preview_momentum",
+                                              "preview_sample_posts", "preview_confidence", "preview_agreement",
+                                              "saturated_week_share", "coverage_note")]
             values.append(row.get("press_metadata") or None)
             lines.append("| " + " | ".join(cell(value) for value in values) + " |")
         lines.append("")
@@ -297,7 +372,7 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="Read counts only; do not call models or run retrieval")
     mode.add_argument("--prepare-only", action="store_true",
-                      help="Prepare Claude queries from text without Gemini or vector retrieval")
+                      help="Prepare Claude queries from text without embeddings or vector retrieval")
     args = parser.parse_args(argv)
     if not 1 <= args.size <= 30:
         parser.error("size must be between 1 and 30")
@@ -306,11 +381,22 @@ def main(argv=None):
     try:
         from backend.db import db
         from scripts.social_metrics import load_labels, separation_report
+        from backend.services.social_embeddings import embedded_filter, spec as embedding_spec
+        spec = embedding_spec()
+        result["embedding"] = {"provider": spec.provider, "model": spec.model, "dims": spec.dims,
+                               "field": spec.field, "index": spec.index}
         posts = list(db["social_posts"].find({}, {"_id": 0, "uri": 1, "text": 1, "term": 1, "terms": 1,
-            "author_hash": 1, "created_at": 1, "embedding_model": 1, "source": 1}))
-        embedded = [p for p in posts if p.get("embedding_model") == "gemini-embedding-2"]
+            "author_hash": 1, "created_at": 1, "source": 1, "synthetic": 1}))
+        # Provenance comes from the provider's own vector field, never a shared model label.
+        embedded_uris = {d["uri"] for d in db["social_posts"].find(embedded_filter(spec), {"_id": 0, "uri": 1})}
+        # Every reported metric is real_only first. Synthetic demo posts never enter these numbers.
+        synthetic = sum(bool(p.get("synthetic")) for p in posts)
+        posts = [p for p in posts if not p.get("synthetic")]
+        embedded = [p for p in posts if p.get("uri") in embedded_uris]
+        result["scope"] = "real_only"
+        result["synthetic_posts_excluded"] = synthetic
         communities = list(db["social_communities"].find({}, {"_id": 0, "author_hash": 1, "community_id": 1}))
-        metrics = list(db["social_trends"].find({}, {"_id": 0}))
+        metrics = [m for m in db["social_trends"].find({}, {"_id": 0}) if not m.get("synthetic")]
         result.update(corpus_posts=len(posts), embedded_posts=len(embedded),
                       cluster_purity=cluster_purity(posts, communities),
                       separation=separation_report(metrics, load_labels()))
@@ -318,6 +404,7 @@ def main(argv=None):
         seed_config = json.loads(seed_path.read_text()) if seed_path.exists() else {}
         seed_rows = seed_config.get("terms", []) if isinstance(seed_config, dict) else seed_config
         result["press_graph"] = press_graph_comparison(seed_rows, metrics, posts)
+        result["coverage_limits"] = coverage_limits(metrics, result["press_graph"])
         if args.dry_run:
             result["reason"] = "Dry run: no Claude paraphrases or live vector lookups were executed."
         else:
@@ -328,7 +415,7 @@ def main(argv=None):
             result["prepared_queries"] = len(queries)
             if args.prepare_only and queries:
                 result["status"] = "prepared"
-                result["reason"] = ("Claude queries prepared or reused. No Gemini embeddings or vector lookups "
+                result["reason"] = ("Claude queries prepared or reused. No query embeddings or vector lookups "
                                     "were executed; recall, MRR and lookup latency remain unmeasured.")
                 if len(queries) < 30:
                     result["reason"] += f" Only {len(queries)} queries are available; the requested benchmark uses 30."
@@ -339,7 +426,8 @@ def main(argv=None):
             elif not {q["uri"] for q in queries}.issubset({p["uri"] for p in embedded}):
                 result["reason"] = "Prepared query targets are not all embedded. Retrieval and latency remain unmeasured."
             else:
-                result["retrieval"] = retrieval_metrics(queries, social.embed_query, social.vector_search_posts)
+                result["retrieval"] = retrieval_metrics(queries, lambda text: social.embed_query(text, timeout=EVAL_EMBED_TIMEOUT_SECONDS),
+                                                        social.vector_search_posts)
                 result["evaluated_queries"] = len(queries)
                 result["status"] = "measured" if result["retrieval"]["successful_lookups"] == len(queries) else "partial"
                 if len(queries) < 30:

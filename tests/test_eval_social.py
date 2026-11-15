@@ -117,6 +117,27 @@ class EvalTests(unittest.TestCase):
         self.assertIn("2026-10-01", report)
         self.assertIn("Incomplete sampling", report)
 
+    def test_press_agreement_is_strict_and_unknown_is_not_comparable(self):
+        self.assertEqual(evaluation.press_agreement("rising", "rising"), "agree")
+        self.assertEqual(evaluation.press_agreement("fading", "peaking"), "disagree")
+        self.assertEqual(evaluation.press_agreement("rising", "unknown"), "not_comparable")
+        self.assertEqual(evaluation.press_agreement("fading", None), "not_comparable")
+
+    def test_ten_press_rows_report_counts_agreement_and_low_samples(self):
+        seeds = [{"term": f"t{i}", "label": "unknown", "press_status": "rising" if i < 5 else "fading"}
+                 for i in range(10)]
+        metrics = [{"term": f"t{i}", "post_count": 40 if i == 0 else 300, "momentum": "unknown" if i else "rising",
+                    "confidence": "low"} for i in range(10)]
+        posts = [{"uri": "s", "term": "t1", "synthetic": True}]
+        result = evaluation.press_graph_comparison(seeds, metrics, posts)
+        self.assertEqual(result["status"], "provided")
+        self.assertEqual(result["agreement_counts"]["agreement"], {"agree": 1, "not_comparable": 9})
+        self.assertEqual(result["low_sample_terms"], ["t0"])
+        self.assertIn("1 agree, 0 disagree, 9 not comparable", result["note"])
+        report = evaluation.report_markdown({"press_graph": result})
+        self.assertIn("Sample posts (real_only)", report)
+        self.assertIn("| t0 | rising | 40 |", report)
+
     def test_prepare_only_thirty_without_gemini_reuses_cached_claude_queries(self):
         posts = [{"uri": str(i), "term": str(i % 3), "text": "Some detailed clothing observation " + str(i)}
                  for i in range(45)]
