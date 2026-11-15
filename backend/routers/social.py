@@ -1,8 +1,12 @@
 """Social sample read endpoints and authenticated, grounded questions."""
+import json
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pymongo import timeout as mongo_timeout
 
@@ -162,3 +166,32 @@ def social_trend_timeline(style: str):
                    editorial={"display": manual["display"], "source_text": manual["source_text"]},
                    run_id=(decision or {}).get("run_id"), decided_at=(decision or {}).get("created_at"))
     return out
+
+
+ATLAS_PATH = Path(__file__).resolve().parents[2] / ".social_runs" / "social_atlas.json"
+ATLAS_AUTHORS_PATH = ATLAS_PATH.with_name("social_atlas_authors.json")
+_ATLAS_AUTHORS: dict = {"mtime": None, "rows": {}}
+
+
+@router.get("/social-atlas")
+def social_atlas():
+    """Precomputed public aggregate atlas (scripts/social_atlas.py). Hash prefixes only, sanitized snippets."""
+    if not ATLAS_PATH.is_file():
+        raise HTTPException(404, "Run scripts/social_atlas.py to build the atlas")
+    return FileResponse(ATLAS_PATH, media_type="application/json")
+
+
+@router.get("/social-atlas/author/{prefix}")
+def social_atlas_author(prefix: str):
+    """One author's sampled styles and up to three sanitized posts, loaded on click."""
+    if not re.fullmatch(r"[0-9a-f]{10}", prefix):
+        raise HTTPException(422, "Author id must be a 10-character hash prefix")
+    if not ATLAS_AUTHORS_PATH.is_file():
+        raise HTTPException(404, "Run scripts/social_atlas.py to build the atlas")
+    mtime = ATLAS_AUTHORS_PATH.stat().st_mtime
+    if _ATLAS_AUTHORS["mtime"] != mtime:
+        _ATLAS_AUTHORS.update(mtime=mtime, rows=json.loads(ATLAS_AUTHORS_PATH.read_text()))
+    row = _ATLAS_AUTHORS["rows"].get(prefix)
+    if row is None:
+        raise HTTPException(404, "No sampled posts for this author")
+    return row

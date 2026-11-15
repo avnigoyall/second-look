@@ -360,4 +360,10 @@ def trends_ui():
     return FileResponse(page)
 
 
+@app.get("/graph-ui", include_in_schema=False)
+def graph_ui():
+    """Social Radar atlas explorer. Data comes from GET /social-atlas."""
+    return FileResponse(ROOT / "dashboard" / "graph.html")
+
+
 app.mount("/dashboard-assets", StaticFiles(directory=ROOT / "dashboard"), name="dashboard-assets")
