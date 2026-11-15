@@ -27,6 +27,7 @@ from backend.routers import attributes as attributes_router
 from backend.routers import closet as closet_router
 from backend.routers import goal as goal_router
 from backend.routers import imessage as imessage_router
+from backend.routers import photon_friend as photon_friend_router
 from backend.routers import trends as trends_router
 from backend.routers import social as social_router
 from backend.services.closet import NO_VECTORS, auto_add_purchase, new_closet_doc
@@ -55,6 +56,7 @@ app.include_router(closet_router.router)
 app.include_router(goal_router.router)
 app.include_router(trends_router.router)
 app.include_router(imessage_router.router)
+app.include_router(photon_friend_router.router)
 app.include_router(social_router.router)
 
 
