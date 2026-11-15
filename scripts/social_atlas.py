@@ -36,15 +36,19 @@ def iso(value):
     return utc(value).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def best_examples(posts, limit):
+def best_examples(posts, limit, style_index=None, extra=None):
     """Most-liked posts with a usable public URL and nonempty sanitized text."""
     rows = []
     for post in sorted(posts, key=lambda p: (-(p.get("like_count") or 0), p.get("uri", ""))):
         url = post_url(post.get("uri", ""))
         snippet = sanitize_snippet(post.get("text"))
         if url and len(snippet) >= 20:
-            rows.append({"url": url, "snippet": snippet, "created_at": iso(post["created_at"]),
-                         "likes": post.get("like_count") or 0})
+            row = {"url": url, "snippet": snippet, "created_at": iso(post["created_at"]), "likes": post.get("like_count") or 0}
+            if style_index is not None:
+                row["styles"] = [style_index[t] for t in terms_for(post) if t in style_index]
+            if extra is not None:
+                row.update(extra(post))
+            rows.append(row)
         if len(rows) >= limit:
             break
     return rows
@@ -171,8 +175,10 @@ def build(posts, communities, trends, claude_named, terms_config, edges, window)
             author_detail[h[:10]] = {
                 "styles": [[style_index[t], n] for t, n in counts.most_common(5)],
                 "likes": sum(p.get("like_count") or 0 for p in rows),
-                "posts": best_examples(rows, POSTS_PER_AUTHOR),
+                "posts": best_examples(rows, POSTS_PER_AUTHOR, style_index),
             }
+
+    connections = build_connections(search_posts, posts, membership, style_index, community_index, author_index)
 
     total_kinds = {kind: len(author_edges[kind]) // 2 for kind in KINDS}
     meta = {
@@ -192,7 +198,79 @@ def build(posts, communities, trends, claude_named, terms_config, edges, window)
         "style_style": [[style_index[a], style_index[b], n] for (a, b), n in style_style_posts.items()],
         "community_links": [[a, b, dict(k)] for (a, b), k in sorted(community_links.items())],
         "authors": authors, "author_edges": author_edges, "author_detail": author_detail,
+        "connections": connections,
     }
+
+
+ORDER = {"s": 0, "c": 1, "a": 2}
+
+
+def pair_key(x, y):
+    """Stable key for two nodes such as ("s", 3) and ("c", 12): styles, then communities, then authors."""
+    a, b = sorted([x, y], key=lambda v: (ORDER[v[0]], v[1]))
+    return f"{a[0]}{a[1]}|{b[0]}{b[1]}"
+
+
+def build_connections(search_posts, all_posts, membership, style_index, community_index, author_index):
+    """What links two nodes, with real example posts. Served one pair at a time."""
+    out = {}
+    by_style_pair, by_style_community = defaultdict(list), defaultdict(list)
+    authors_by_style = defaultdict(set)
+    for p in search_posts:
+        matched = sorted({t for t in terms_for(p) if t in style_index}, key=lambda t: style_index[t])
+        for t in matched:
+            if p.get("author_hash"):
+                authors_by_style[t].add(p["author_hash"])
+        for i, a in enumerate(matched):
+            for b in matched[i + 1:]:
+                by_style_pair[(a, b)].append(p)
+        cid = membership.get(p.get("author_hash"))
+        if cid is not None:
+            for t in matched:
+                by_style_community[(t, cid)].append(p)
+    for (a, b), rows in by_style_pair.items():
+        out[pair_key(("s", style_index[a]), ("s", style_index[b]))] = {
+            "shared_posts": len(rows), "shared_authors": len(authors_by_style[a] & authors_by_style[b]),
+            "examples": best_examples(rows, 3)}
+    # Style pairs with authors in common but no post tagged with both.
+    terms = sorted(authors_by_style, key=lambda t: style_index[t])
+    for i, a in enumerate(terms):
+        for b in terms[i + 1:]:
+            key = pair_key(("s", style_index[a]), ("s", style_index[b]))
+            if key not in out:
+                shared = len(authors_by_style[a] & authors_by_style[b])
+                if shared:
+                    out[key] = {"shared_posts": 0, "shared_authors": shared, "examples": []}
+    for (t, cid), rows in by_style_community.items():
+        out[pair_key(("s", style_index[t]), ("c", community_index[cid]))] = {"posts": len(rows), "examples": best_examples(rows, 3)}
+
+    # Observed interactions, kept with the post that created them.
+    def targets(p):
+        if p.get("reply_parent_author_hash"):
+            yield "reply", p["reply_parent_author_hash"]
+        if p.get("quote_author_hash"):
+            yield "quote", p["quote_author_hash"]
+        for m in dict.fromkeys(p.get("mention_author_hashes") or []):
+            yield "mention", m
+    author_pairs, community_pairs = defaultdict(list), defaultdict(list)
+    for p in all_posts:
+        source = p.get("author_hash")
+        if source not in author_index:
+            continue
+        for kind, target in targets(p):
+            if target == source or target not in author_index:
+                continue
+            author_pairs[pair_key(("a", author_index[source]), ("a", author_index[target]))].append((kind, source, p))
+            cs, ct = membership.get(source), membership.get(target)
+            if cs is not None and ct is not None and cs != ct:
+                community_pairs[pair_key(("c", community_index[cs]), ("c", community_index[ct]))].append((kind, source, p))
+    for key, rows in list(author_pairs.items()) + list(community_pairs.items()):
+        kinds = Counter(kind for kind, _, _ in rows)
+        posts = [p for _, _, p in rows]
+        meta = {p["uri"]: (kind, author_index[source]) for kind, source, p in rows}
+        out[key] = {"kinds": dict(kinds), "examples": best_examples(
+            posts, 4, extra=lambda post: {"kind": meta[post["uri"]][0], "from_author": meta[post["uri"]][1]})}
+    return out
 
 
 def main(argv=None):
@@ -201,13 +279,17 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, default=ROOT / ".social_runs" / "social_atlas.json")
     parser.add_argument("--authors-output", type=Path, default=ROOT / ".social_runs" / "social_atlas_authors.json",
                         help="Per-author details, served one author at a time")
+    parser.add_argument("--connections-output", type=Path, default=ROOT / ".social_runs" / "social_atlas_connections.json",
+                        help="What links two nodes, served one pair at a time")
     args = parser.parse_args(argv)
     if not args.edges.exists():
         parser.error("Edge list missing. Run: scripts/social_graph.py --name-limit 0 --edges-out " + str(args.edges))
     from backend.db import db
     edges = json.loads(args.edges.read_text())["edges"]
     posts = list(db["social_posts"].find({}, {"_id": 0, "uri": 1, "author_hash": 1, "created_at": 1, "term": 1,
-                                             "terms": 1, "text": 1, "like_count": 1, "source": 1}))
+                                             "terms": 1, "text": 1, "like_count": 1, "source": 1,
+                                             "reply_parent_author_hash": 1, "quote_author_hash": 1,
+                                             "mention_author_hashes": 1}))
     communities = list(db["social_communities"].find({}, {"_id": 0, "author_hash": 1, "community_id": 1, "name": 1}))
     trends = list(db["social_trends"].find({}, {"_id": 0}))
     claude_named = {d["community_id"] for d in db["social_graph_meta"].find({"source": "claude"}, {"community_id": 1})}
@@ -217,10 +299,13 @@ def main(argv=None):
     atlas = build(posts, communities, trends, claude_named, terms_config, edges, window)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     details = atlas.pop("author_detail")
+    connections = atlas.pop("connections")
     args.output.write_text(json.dumps(atlas, separators=(",", ":"), ensure_ascii=True))
     args.authors_output.write_text(json.dumps(details, separators=(",", ":"), ensure_ascii=True))
+    args.connections_output.write_text(json.dumps(connections, separators=(",", ":"), ensure_ascii=True))
     print(json.dumps({**atlas["meta"], "bytes": args.output.stat().st_size,
-                      "author_detail_bytes": args.authors_output.stat().st_size}))
+                      "author_detail_bytes": args.authors_output.stat().st_size,
+                      "connections": len(connections), "connection_bytes": args.connections_output.stat().st_size}))
 
 
 if __name__ == "__main__":

@@ -74,6 +74,49 @@ class AtlasTests(unittest.TestCase):
         self.assertEqual(result["authors"]["style"][index], -1)
 
 
+class ConnectionTests(unittest.TestCase):
+    def build(self):
+        reply = post(5, B, ["sambas"], likes=4, text="Replying about these sambas, they look great with barrel jeans")
+        reply["reply_parent_author_hash"] = A
+        mention = post(6, A, ["barrel jeans"], text="Shout out for the barrel jeans fit check today friends")
+        mention["mention_author_hashes"] = [B, B]
+        posts = [post(1, A, ["barrel jeans", "sambas"], likes=9), post(2, C, ["sambas"]), reply, mention]
+        communities = [{"author_hash": A, "community_id": "c1", "name": "One"},
+                       {"author_hash": B, "community_id": "c2", "name": "Two"},
+                       {"author_hash": C, "community_id": "c2", "name": "Two"}]
+        config = {"terms": [{"term": "barrel jeans"}, {"term": "sambas"}]}
+        return atlas.build(posts, communities, [], set(), config, [], None)
+
+    def test_pair_keys_are_ordered_style_community_author(self):
+        self.assertEqual(atlas.pair_key(("a", 3), ("s", 9)), "s9|a3")
+        self.assertEqual(atlas.pair_key(("c", 2), ("c", 1)), "c1|c2")
+
+    def test_style_pairs_count_shared_posts_and_authors(self):
+        conn = self.build()["connections"]
+        pair = conn["s0|s1"]
+        # Only post 1 carries both terms; tags come from search matches, not free text.
+        self.assertEqual(pair["shared_posts"], 1)
+        self.assertEqual(pair["shared_authors"], 1)
+        self.assertEqual(pair["examples"][0]["likes"], 9)
+
+    def test_interactions_keep_kind_direction_and_post(self):
+        result = self.build()
+        hashes = result["authors"]["hash"]
+        a, b = hashes.index(A[:10]), hashes.index(B[:10])
+        key = atlas.pair_key(("a", a), ("a", b))
+        link = result["connections"][key]
+        self.assertEqual(link["kinds"], {"reply": 1, "mention": 1})
+        reply = next(e for e in link["examples"] if e["kind"] == "reply")
+        self.assertEqual(reply["from_author"], b)
+        community_key = atlas.pair_key(("c", result["authors"]["community"][a]), ("c", result["authors"]["community"][b]))
+        self.assertEqual(result["connections"][community_key]["kinds"], {"reply": 1, "mention": 1})
+
+    def test_style_community_pairs_cover_small_counts(self):
+        result = self.build()
+        two = next(c["id"] for c in result["communities"] if c["name"] == "Two")
+        self.assertEqual(result["connections"][f"s1|c{two}"]["posts"], 2)
+
+
 class AtlasEndpointTests(unittest.TestCase):
     def test_author_prefix_is_validated_before_file_access(self):
         for bad in ("../etc", "ABCDEF1234", "abc", "0123456789a"):
@@ -93,6 +136,23 @@ class AtlasEndpointTests(unittest.TestCase):
                 with self.assertRaises(HTTPException) as caught:
                     router.social_atlas_author("9999999999")
                 self.assertEqual(caught.exception.status_code, 404)
+
+
+    def test_connection_validates_orders_and_defaults_to_empty(self):
+        import tempfile
+        from pathlib import Path
+        for bad in (("s1", "s1"), ("x1", "s2"), ("s1", "s1234567")):
+            with self.assertRaises(HTTPException) as caught:
+                router.social_atlas_connection(*bad)
+            self.assertEqual(caught.exception.status_code, 422)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "social_atlas_connections.json"
+            path.write_text(json.dumps({"s3|c12": {"posts": 5, "examples": []}}))
+            with mock.patch.object(router, "ATLAS_CONNECTIONS_PATH", path), \
+                    mock.patch.dict(router._ATLAS_CONNECTIONS, {"mtime": None, "rows": {}}):
+                self.assertEqual(router.social_atlas_connection("c12", "s3")["posts"], 5)
+                self.assertEqual(router.social_atlas_connection("s3", "c12")["posts"], 5)
+                self.assertEqual(router.social_atlas_connection("a1", "a2"), {})
 
 
 if __name__ == "__main__":
