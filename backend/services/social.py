@@ -482,12 +482,27 @@ def _lookup(query: str, cfg: dict):
     return context_from_hits(vector_search_posts(embed_query(query)), cfg)
 
 
+class _Failed:
+    """Cached marker for a failed lookup. social_context returns None for it, as before; status says "error"."""
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+_FAILED = _Failed()
+
+
+def _set_status(status: dict | None, state: str) -> None:
+    if status is not None:
+        status["state"] = state
+
+
 def _run_lookup(query: str, cfg: dict):
     try:
         return _lookup(query, cfg)
     except Exception:
         # Exception strings from SDKs can include URLs or supplied text. Never log them.
-        return None
+        return _FAILED
     finally:
         _RUNTIME_SLOTS.release()
 
@@ -503,7 +518,7 @@ def _finish_lookup(query, cfg, future):
     try:
         result = future.result()
     except Exception:
-        result = None
+        result = _FAILED
     with _CACHE_LOCK:
         if _INFLIGHT.get(query) is not future:
             return
@@ -513,17 +528,21 @@ def _finish_lookup(query, cfg, future):
         _CACHE[query] = (time.monotonic() + float(cfg["cache_seconds"]), copy.deepcopy(result))
 
 
-def social_context(item) -> dict | None:
+def social_context(item, status: dict | None = None) -> dict | None:
     """Optional context. No-match, errors and deadline expiry all return None.
 
     A bounded shared pool prevents a stalled embedding provider from creating a
     fresh thread per request. In-flight calls are reused. Cache hits copy results.
     SOCIAL_RADAR_ENABLED=1 activates retrieval after the offline pipeline is ready.
+    status: optional dict. On return status["state"] is one of off, no_query, busy, timeout, error,
+    no_match (lookup ran, below the thresholds) or matched. The return value is unchanged by it.
     """
     if os.getenv("SOCIAL_RADAR_ENABLED", "0").lower() not in ("1", "true", "yes"):
+        _set_status(status, "off")
         return None
     query = item_query(item)
     if not query:
+        _set_status(status, "no_query")
         return None
     cfg = momentum_config()
     now = time.monotonic()
@@ -531,15 +550,17 @@ def social_context(item) -> dict | None:
     with _CACHE_LOCK:
         cached = _CACHE.get(query)
         if cached and cached[0] > now:
-            return copy.deepcopy(cached[1])
+            return _finish_status(cached[1], status)
         future = _INFLIGHT.get(query)
         if future is None:
             if not _RUNTIME_SLOTS.acquire(blocking=False):
+                _set_status(status, "busy")
                 return None
             try:
                 future = _RUNTIME_POOL.submit(_run_lookup, query, cfg)
             except Exception:
                 _RUNTIME_SLOTS.release()
+                _set_status(status, "error")
                 return None
             _INFLIGHT[query] = future
             created = True
@@ -549,7 +570,16 @@ def social_context(item) -> dict | None:
     try:
         result = future.result(timeout=float(cfg["lookup_timeout_seconds"]))
     except FutureTimeout:
+        _set_status(status, "timeout")
         return None
     except Exception:
-        result = None
+        result = _FAILED
+    return _finish_status(result, status)
+
+
+def _finish_status(result, status: dict | None) -> dict | None:
+    if result is _FAILED:
+        _set_status(status, "error")
+        return None
+    _set_status(status, "matched" if result else "no_match")
     return copy.deepcopy(result)

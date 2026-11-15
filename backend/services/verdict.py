@@ -25,7 +25,7 @@ from bson import ObjectId
 
 from backend import models as m
 from backend.db import closet_items, trends as trends_collection, verdicts
-from backend.services import radar_read, timing, verdict_deps
+from backend.services import radar_field, radar_read, timing, verdict_deps
 from backend.services.social import social_context
 from backend.services.closet import NO_VECTORS, find_matches, thresholds
 from backend.services.item_understanding import fetch_image
@@ -650,9 +650,9 @@ def read_attributes(pool: ThreadPoolExecutor, item: dict, started: float) -> tup
         return {"status": "attributes_failed"}, photo
 
 
-def timed(name: str, fn, *args):
+def timed(name: str, fn, *args, **kwargs):
     with timing.stage(name):
-        return fn(*args)
+        return fn(*args, **kwargs)
 
 
 def closet_docs(ids: list[str]) -> dict:
@@ -709,6 +709,7 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
     reply, claude_errors, overrides, confidence = None, [], [], None
     matched_ids, trend_name, docs = [], None, {}
     social, sample = None, None
+    social_status, f_radar, radar = {}, None, None
 
     if understood.get("status") != "ok":
         signals["path"] = "attributes_failed"
@@ -719,7 +720,8 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
         verdict, decided_by, reason = "good_buy", "code", NON_APPAREL_REASON
     else:
         # Optional lookup runs alongside existing signals and has its own short deadline.
-        f_social = timing.submit(pool, timed, "social_ms", social_context, {**item, "attributes": attrs})
+        f_social = timing.submit(pool, timed, "social_ms", social_context, {**item, "attributes": attrs},
+                                 status=social_status)
         mark = time.monotonic()
         gathered = gather_signals(user, {**item, "target_crop": target_crop, "photo": photo}, attrs, config, early)
         timings["signals_ms"] = elapsed_ms(mark)
@@ -779,6 +781,9 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
             social = m.SocialContext.model_validate(social).model_dump() if social else None
         except Exception:
             social = None
+        # Radar context reads stored decisions in the background while Claude answers. Never a verdict input.
+        if social_status.get("state") in ("matched", "no_match"):  # flag off, timeout, failure: no field
+            f_radar = pool.submit(radar_field.radar_for, social, dict(social_status))
         if social:
             signals["social_context"] = social
             payload["social_context"] = social
@@ -824,6 +829,12 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
             missing = [i for i in matched_ids if i not in docs]
             docs.update(closet_docs(missing))
 
+    if f_radar is not None:
+        try:
+            found = f_radar.result(timeout=max(0.0, min(0.5, deadline - time.monotonic())))
+            radar = m.RadarField.model_validate(found) if found else None
+        except Exception:  # timeout or malformed: omit the optional field
+            radar = None
     pool.shutdown(wait=False)
 
     # ---------- build the response ----------
@@ -883,7 +894,7 @@ def decide(user: dict, item: dict | m.Item, save: bool = False) -> tuple[m.Analy
         alternatives=alternatives, outfits=[], expected_wears=expected_wears, cost_per_wear=cost_per_wear,
         matched_closet_items=matched_items, decided_by=decided_by, closet_small=signals["closet_small"],
         zone=signals["zone"], wears_estimated=expected_wears is not None,
-        social_context=social,
+        social_context=social, radar=radar,
     )
     log.info("verdict %s by %s in %d ms (zone %s, allowed %s)", verdict, decided_by, latency_ms,
              signals["zone"], signals["allowed"])

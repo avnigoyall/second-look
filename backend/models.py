@@ -265,6 +265,19 @@ class SocialContext(BaseModel):
     counts_are_lower_bound: bool = False
 
 
+class RadarField(BaseModel):
+    """Optional Radar context next to the verdict. Not a verdict. Label from the stored agent decision only."""
+    matched_style: str | None = None
+    similarity: float | None = None
+    label: Literal["micro_trend", "established", "still_active", "unknown"]
+    confidence: Literal["low", "medium", "high"]
+    summary: str
+    weeks_to_rise: int | None = None
+    weeks_active: int | None = None
+    evidence_note: str
+    timeline_url: str | None = None
+
+
 class AnalyzeResponse(BaseModel):
     status: Literal["ok"]
     verdict_id: str
@@ -294,6 +307,16 @@ class AnalyzeResponse(BaseModel):
         None, description="Part 2 attributes of the item being added (POST /analyze only). null when attributes "
                           "failed or the item is not apparel. The extension's ownership question reads them, so it "
                           "needs no second /attributes call")
+    radar: RadarField | None = Field(
+        None, description="Optional Radar context from the stored agent decision. Left out of the response when "
+                          "SOCIAL_RADAR_ENABLED is off or the lookup timed out or failed")
+
+    @model_serializer(mode="wrap")
+    def _drop_absent_radar(self, handler):
+        data = handler(self)
+        if self.radar is None:
+            data.pop("radar", None)  # absent, not null: the flag-off response stays as before
+        return data
 
 
 class ReadPageResponse(BaseModel):

@@ -10,7 +10,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, R
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from pymongo.errors import DuplicateKeyError, PyMongoError
 
 from backend import models as m
@@ -193,6 +193,9 @@ def analyze(body: m.AnalyzeRequest, http: Response, request: Request, user=Depen
     if response.social_context and (ROOT / "dashboard" / "trends.html").is_file():
         response.social_context.trends_ui_url = str(request.base_url).rstrip("/") + "/trends-ui?" + urlencode(
             {"term": response.social_context.term})
+    if response.radar and response.radar.matched_style:
+        response.radar.timeline_url = str(request.base_url).rstrip("/") + "/social/trends/" + quote(
+            response.radar.matched_style, safe="") + "/timeline"
     stored = record.get("attributes")
     if stored and stored.get("category") and stored.get("is_apparel") is not False:
         try:
