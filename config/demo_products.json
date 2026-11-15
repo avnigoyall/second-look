@@ -1,0 +1,14 @@
+{
+  "note": "Demo items for scripts/demo_up.sh and scripts/prewarm_social.py. Chosen only from styles with an agent decision (run radar-main-1). No style has an agent label of micro_trend, so that slot holds the only non-established agent label (still_active).",
+  "products": [
+    {"name": "Barrel Leg Jeans", "description": "Mid-wash denim barrel jeans with a curved wide leg and a high rise.",
+     "category": "jeans", "color_family": "blue", "price": 79.0, "expected_term": "barrel jeans",
+     "demo_role": "established, real data (agent established, medium; rule established; 472 sampled posts)"},
+    {"name": "Quarter Zip Pullover", "description": "Cotton knit quarter zip pullover sweater with a stand collar.",
+     "category": "sweater", "color_family": "gray", "price": 59.0, "expected_term": "quarter zip",
+     "demo_role": "trend slot: agent still_active, low (no style has an agent micro_trend label); 1601 sampled posts"},
+    {"name": "Zqxv Plorbnik 7731", "description": "Zqxv plorbnik gizmo, model 7731.",
+     "price": 12.0, "expected_term": null,
+     "demo_role": "nonsense item: expect no matching style"}
+  ]
+}
